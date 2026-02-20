@@ -6,14 +6,61 @@ pyttsx3>=2.90
 ollama>=0.3.0
 google-generativeai>=0.8.0
 
+# LLM Providers
+groq>=0.4.0
+openai>=1.0.0
+
 # Audio processing
 pyaudio>=0.2.14
 sounddevice>=0.4.6
 numpy>=1.24.0
+torch>=2.0.0
 
 # VAD
 silero-vad>=5.1
 
+# Wake word (optional - requires Picovoice account)
+# pvporcupine>=3.0.0
+
+# GUI & System
+pystray>=0.19.0
+Pillow>=10.0.0
+pyperclip>=1.8.0
+
+# Google APIs (Calendar integration)
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-api-python-client>=2.0.0
+
+# Windows automation
+pywinauto>=0.6.8
+pyautogui>=0.9.54
+psutil>=5.9.0
+keyboard>=0.13.5
+
+# Text matching
+rapidfuzz>=3.0.0
+
+# Web & networking
+aiohttp>=3.9.0
+
 # Utilities
 python-dotenv>=1.0.0
 aiofiles>=23.0.0
+croniter>=2.0.0
+
+# Memory & Embeddings (optional but recommended)
+sqlite-vec>=0.1.0  # Vector search for long-term memory
+# sentence-transformers>=2.5.0  # For better embeddings (optional, larger)
+
+# UI / Overlay
+pystray>=0.19.0
+Pillow>=10.0.0
+PyQt6>=6.6.0
+PyYAML>=6.0.0
+
+# Spotify (optional)
+# spotipy>=2.23.0
+
+# Audio playback (optional - for better MP3 playback)
+# pydub>=0.25.0

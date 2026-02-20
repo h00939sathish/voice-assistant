@@ -1,6 +1,5 @@
 import asyncio
-import aiohttp
-from typing import List, Dict, Any
+from typing import List, Dict
 
 class NewsSkill:
     """Skill for fetching latest news headlines"""

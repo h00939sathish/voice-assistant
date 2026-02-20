@@ -84,7 +84,8 @@ def run_linter(linter: dict, cwd: Path) -> dict:
             text=True,
             encoding='utf-8',
             errors='replace',
-            timeout=120
+            timeout=120,
+            shell=False
         )
         
         result["output"] = proc.stdout[:2000] if proc.stdout else ""
@@ -105,7 +106,7 @@ def main():
     project_path = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
     
     print(f"\n{'='*60}")
-    print(f"[LINT RUNNER] Unified Linting")
+    print("[LINT RUNNER] Unified Linting")
     print(f"{'='*60}")
     print(f"Project: {project_path}")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

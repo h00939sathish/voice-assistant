@@ -1,5 +1,3 @@
-import os
-import sys
 import asyncio
 import logging
 import time
@@ -346,7 +344,7 @@ class WebAgent:
             logger.error(f"Browser search failed: {e}")
             try:
                 await page.close()
-            except:
+            except Exception:
                 pass
             return []
         finally:
@@ -389,7 +387,7 @@ class WebAgent:
             if page:
                 try:
                     await page.close()
-                except:
+                except Exception:
                     pass
             self.active_tasks -= 1
 
@@ -435,7 +433,7 @@ class WebAgent:
                                 "title": title.strip(),
                                 "price": f"${price.strip()}"
                             })
-                    except:
+                    except (AttributeError, TypeError):
                         continue
 
                 self.stats["tasks_completed"] += 1

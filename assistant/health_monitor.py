@@ -4,8 +4,6 @@ Health Monitor - Watchdog for system stability and auto-recovery
 import threading
 import time
 import logging
-import sys
-import os
 from datetime import datetime
 
 logger = logging.getLogger(__name__)

@@ -1,5 +1,4 @@
 import ollama
-import os
 
 # 1. Define the tools (The "Hands" you give the model)
 def read_file(filepath):

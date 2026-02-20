@@ -2,7 +2,6 @@
 Debug script to check system connections
 """
 import os
-import sys
 from dotenv import load_dotenv
 
 # Force reload of .env

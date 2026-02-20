@@ -6,18 +6,28 @@ import edge_tts
 import pyttsx3
 import tempfile
 import os
-import numpy as np
-import sounddevice as sd
-from typing import Optional, Generator, AsyncGenerator
-import io
+import subprocess
+import shutil
+from typing import Optional, AsyncGenerator, Dict
 import sys
+
+from assistant.interfaces import ITTSProvider
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import TTS_VOICE, TTS_RATE, TTS_PITCH
 
 
-class TextToSpeech:
+class TextToSpeech(ITTSProvider):
     """TTS with edge-tts (online) and pyttsx3 (offline fallback)"""
+    
+    # Common phrases to pre-cache
+    CACHE_PHRASES = [
+        "Good morning!",
+        "Sure!",
+        "Okay.",
+        "I'm sorry, I didn't understand that.",
+        "Is there anything else I can help you with?",
+    ]
     
     def __init__(self):
         self.voice = TTS_VOICE
@@ -25,6 +35,9 @@ class TextToSpeech:
         self.pitch = TTS_PITCH
         self._pyttsx_engine: Optional[pyttsx3.Engine] = None
         self._use_fallback = False
+        self._cache: Dict[str, bytes] = {}  # Text -> MP3 cache
+        self._cache_dir = os.path.join(tempfile.gettempdir(), "buddy_tts_cache")
+        os.makedirs(self._cache_dir, exist_ok=True)
         
     def _init_fallback(self):
         """Initialize pyttsx3 fallback engine"""
@@ -92,8 +105,13 @@ class TextToSpeech:
     
     def speak(self, text: str):
         """
-        Speak text - tries edge-tts first, falls back to pyttsx3
+        Speak text - tries cache, then edge-tts, falls back to pyttsx3
         """
+        # Check cache first
+        if text in self._cache:
+            self._play_mp3(self._cache[text])
+            return
+            
         if self._use_fallback:
             self._speak_fallback(text)
             return
@@ -102,6 +120,8 @@ class TextToSpeech:
             # Try edge-tts
             audio_data = asyncio.run(self.synthesize(text))
             if audio_data:
+                # Cache for future use
+                self._cache[text] = audio_data
                 self._play_mp3(audio_data)
             else:
                 self._speak_fallback(text)
@@ -133,21 +153,21 @@ class TextToSpeech:
             except ImportError:
                 # Fallback: use system player
                 if sys.platform == "win32":
-                    os.system(f'start /min wmplayer "{temp_path}"')
+                    # Use os.startfile for safe Windows playback
+                    os.startfile(temp_path)
                     import time
                     time.sleep(len(mp3_data) / 16000)  # Rough estimate
                 else:
-                    os.system(f'mpv --no-video "{temp_path}" 2>/dev/null')
+                    subprocess.run(["mpv", "--no-video", temp_path], check=False)
             
             # Cleanup
             try:
                 os.unlink(temp_path)
-            except:
+            except OSError:
                 pass
                 
         except Exception as e:
             print(f"   ⚠️ Audio playback error: {e}")
-            self._speak_fallback(text)
     
     async def speak_streaming(self, text: str):
         """
@@ -155,9 +175,6 @@ class TextToSpeech:
         Pipes audio data directly to a media player process (mpv).
         """
         try:
-            import subprocess
-            import shutil
-            
             # Check for mpv or ffplay
             player = shutil.which("mpv")
             args = ["mpv", "--no-video", "--no-terminal", "-"]
@@ -181,7 +198,8 @@ class TextToSpeech:
                 args,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                stderr=subprocess.DEVNULL,
+                shell=False
             )
             
             # Pipe chunks to player
@@ -200,6 +218,10 @@ class TextToSpeech:
         except Exception as e:
             print(f"   ⚠️ Streaming TTS error: {e}")
             self._speak_fallback(text)
+
+    def stop(self):
+        """Stop any ongoing speech (placeholder for now as edge-tts is mostly blocking/subprocess-based)"""
+        pass
 
 
 def test_tts():

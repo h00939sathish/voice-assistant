@@ -8,6 +8,9 @@ from typing import Optional, Tuple, List
 import sys
 import os
 import time
+import threading
+
+from assistant.interfaces import ISTTProvider, IAudioManager
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
@@ -16,7 +19,7 @@ from config import (
 )
 
 
-class SpeechToText:
+class SpeechToText(ISTTProvider):
     """Speech-to-Text with VAD-based endpoint detection"""
     
     def __init__(self):
@@ -24,59 +27,75 @@ class SpeechToText:
         self.vad_model = None
         self.vad_utils = None
         self._audio_buffer: List[bytes] = []
+        self._loading_lock = threading.Lock()
+        self._is_loaded = False
         
     def load_models(self):
-        """Load Whisper and VAD models"""
-        print("🔄 Loading STT models...")
-        
-        # Load faster-whisper
-        self.whisper_model = WhisperModel(
-            WHISPER_MODEL,
-            device=WHISPER_DEVICE,
-            compute_type=WHISPER_COMPUTE_TYPE
-        )
-        print(f"   ✅ Whisper model: {WHISPER_MODEL} ({WHISPER_DEVICE.upper()})")
-        
-        # Load Silero VAD
-        self.vad_model, self.vad_utils = torch.hub.load(
-            repo_or_dir='snakers4/silero-vad',
-            model='silero_vad',
-            force_reload=False,
-            onnx=True
-        )
-        print("   ✅ Silero VAD loaded")
-        
+        """Load Whisper and VAD models (thread-safe)"""
+        with self._loading_lock:
+            if self._is_loaded:
+                return
+                
+            print("🔄 Loading STT models...")
+            
+            # 1. Load faster-whisper
+            try:
+                self.whisper_model = WhisperModel(
+                    WHISPER_MODEL,
+                    device=WHISPER_DEVICE,
+                    compute_type=WHISPER_COMPUTE_TYPE
+                )
+                print(f"   ✅ Whisper model: {WHISPER_MODEL} ({WHISPER_DEVICE.upper()})")
+            except Exception as e:
+                print(f"   ❌ Whisper load failed: {e}")
+
+            # 2. Load Silero VAD (Safe Mode: pure torch)
+            try:
+                self.vad_model, self.vad_utils = torch.hub.load(
+                    repo_or_dir='snakers4/silero-vad',
+                    model='silero_vad',
+                    force_reload=False,
+                    onnx=False
+                )
+                self.vad_model.to('cpu')
+                print("   ✅ Silero VAD loaded (Safe Mode)")
+            except Exception as e:
+                print(f"   ⚠️ Silero VAD failed ({e}). Switching to Energy Fallback.")
+                self.vad_model = None # Trigger Energy Fallback in listen logic
+            
+            self._is_loaded = True
+
     def _check_speech(self, audio_chunk: bytes) -> float:
         """
-        Check if audio chunk contains speech
-        
-        Returns:
-            Speech probability (0.0 - 1.0)
+        Check if audio chunk contains speech.
+        If Silero VAD is missing, use energy-based detection.
         """
-        if self.vad_model is None:
-            return 1.0  # Assume speech if no VAD
-        
-        # Convert to float tensor
         audio_int16 = np.frombuffer(audio_chunk, dtype=np.int16)
-        audio_float = audio_int16.astype(np.float32) / 32768.0
-        audio_tensor = torch.from_numpy(audio_float)
         
-        # Get speech probability
-        speech_prob = self.vad_model(audio_tensor, SAMPLE_RATE).item()
-        return speech_prob
+        # 1. Try Silero VAD if available
+        if self.vad_model is not None:
+            try:
+                audio_float = audio_int16.astype(np.float32) / 32768.0
+                audio_tensor = torch.from_numpy(audio_float)
+                # Ensure tensor is on correct device for the model
+                speech_prob = self.vad_model(audio_tensor, SAMPLE_RATE).item()
+                return speech_prob
+            except Exception:
+                pass # Fall through to energy check
+        
+        # 2. Fallback: Simple RMS Energy Detection
+        # Calculate Root Mean Square energy
+        rms = np.sqrt(np.mean(audio_int16.astype(np.float64)**2))
+        # Map RMS ~100-1000 to 0.0-1.0 probability
+        # (Typical silence is < 50, speech is > 300)
+        prob = min(1.0, max(0.0, (rms - 100) / 500))
+        return prob
     
-    def listen_with_vad(self, audio_manager, max_duration: float = 15.0) -> Optional[bytes]:
+    def listen_with_vad(self, audio_manager: IAudioManager, max_duration: float = 15.0) -> Optional[bytes]:
         """
         Listen for speech using VAD to detect when user stops speaking
-        
-        Args:
-            audio_manager: AudioManager instance (already recording)
-            max_duration: Maximum listening time in seconds
-            
-        Returns:
-            Complete audio bytes or None if no speech detected
         """
-        if self.vad_model is None:
+        if not self._is_loaded:
             self.load_models()
         
         self._audio_buffer = []
@@ -122,16 +141,13 @@ class SpeechToText:
     def transcribe(self, audio_bytes: bytes) -> Tuple[str, float]:
         """
         Transcribe audio bytes to text
-        
-        Args:
-            audio_bytes: Raw audio bytes (int16, 16kHz)
-            
-        Returns:
-            Tuple of (transcription, confidence)
         """
         if self.whisper_model is None:
             self.load_models()
         
+        if self.whisper_model is None:
+            return "Error: STT model not loaded", 0.0
+
         # Convert to numpy float32
         audio_int16 = np.frombuffer(audio_bytes, dtype=np.int16)
         audio_float = audio_int16.astype(np.float32) / 32768.0
@@ -163,39 +179,6 @@ class SpeechToText:
         
         text = " ".join(text_parts).strip()
         avg_confidence = (total_prob / count) if count > 0 else -1.0
-        # Convert log prob to probability (exp of log prob)
-        # Typical values: -0.3 = ~74%, -0.5 = ~60%, -0.7 = ~50%, -1.0 = ~37%
         confidence = min(1.0, max(0.0, np.exp(avg_confidence)))
         
         return text, confidence
-
-
-def test_stt():
-    """Test STT with VAD"""
-    from .audio_manager import AudioManager
-    
-    stt = SpeechToText()
-    stt.load_models()
-    
-    audio = AudioManager()
-    audio.start_stream()
-    audio.start_recording()
-    
-    print("\n🎤 Speak something (I'll detect when you stop)...\n")
-    
-    audio_bytes = stt.listen_with_vad(audio, max_duration=10.0)
-    
-    audio.stop_recording()
-    audio.stop_stream()
-    
-    if audio_bytes:
-        print("📝 Transcribing...")
-        text, confidence = stt.transcribe(audio_bytes)
-        print(f"\n✅ Transcription: '{text}'")
-        print(f"   Confidence: {confidence:.2%}")
-    else:
-        print("❌ No audio captured")
-
-
-if __name__ == "__main__":
-    test_stt()

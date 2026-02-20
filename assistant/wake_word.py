@@ -5,6 +5,7 @@ import numpy as np
 from typing import Callable, Optional
 import sys
 import os
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
@@ -13,93 +14,113 @@ from config import (
 )
 
 class WakeWordDetector:
-    """Detects wake word using Porcupine (priority) or openWakeWord (fallback)"""
+    """Detects wake word using openWakeWord (Primary) or Vosk (Fallback)"""
     
     def __init__(self, on_wake: Optional[Callable] = None):
         self.threshold = WAKE_WORD_THRESHOLD
         self.on_wake = on_wake
         self.oww_model = None
-        self.porcupine = None
-        self.use_porcupine = False
+        self.vosk_rec = None
+        self.use_vosk = False
+        self._chunk_counter = 0  # For rate limiting
+        self._loading_lock = threading.Lock()
+        self._is_loaded = False
         
     def load_model(self):
-        """Load the wake word model"""
-        # Try loading Porcupine first if key is present
-        if PICOVOICE_ACCESS_KEY:
+        """Load the wake word models (thread-safe)"""
+        with self._loading_lock:
+            if self._is_loaded:
+                return
+            
+            # 1. openWakeWord (Modern Neural - Primary)
+            print("🔄 Loading openWakeWord engine (Primary)...")
             try:
-                import pvporcupine
-                print("🔄 Loading Porcupine wake word model...")
-                
-                keyword_path = PORCUPINE_KEYWORD_PATH if os.path.exists(PORCUPINE_KEYWORD_PATH) else None
-                
-                # Load multiple keywords
-                # Priority: Custom model -> Built-ins
-                keyword_paths = [keyword_path] if keyword_path else []
-                keywords = None 
-                
-                if not keyword_paths:
-                    # Fallback to built-in keywords if no custom model
-                    # Note: Availability depends on platform/license
-                    keywords = ["jarvis", "computer", "alexa", "hey google"]
+                import openwakeword
+                try:
+                    openwakeword.utils.download_models()
+                except Exception as e:
+                    print(f"⚠️ Model download skipped/failed: {e}")
+
+                from openwakeword.model import Model
+                try:
+                    self.oww_model = Model(
+                        wakeword_models=[WAKE_WORD_MODEL],
+                        inference_framework="onnx"
+                    )
+                    self._is_loaded = True
+                    print(f"✅ openWakeWord loaded: '{WAKE_WORD_MODEL}'")
+                    return # Successfully loaded primary
+                except Exception as e:
+                    print(f"⚠️ openWakeWord error: {e}")
+                    print("   Trying fallback neural model...")
+                    try:
+                        self.oww_model = Model(
+                            wakeword_models=["alexa_v0.1"],
+                            inference_framework="onnx"
+                        )
+                        self._is_loaded = True
+                        print("✅ openWakeWord loaded: 'alexa_v0.1' (Fallback)")
+                        return
+                    except Exception as e2:
+                        print(f"⚠️ Neural fallback failed: {e2}")
+                    
+            except Exception as e:
+                print(f"❌ openWakeWord critical failure: {e}")
+
+            # 2. Vosk (Reliable Speech-to-Text Fallback)
+            print("🔄 Loading Vosk engine (Fallback)...")
+            try:
+                from vosk import Model, KaldiRecognizer, SetLogLevel
+                SetLogLevel(-1) # Silence logs
                 
                 try:
-                    self.porcupine = pvporcupine.create(
-                        access_key=PICOVOICE_ACCESS_KEY,
-                        keyword_paths=keyword_paths if keyword_paths else None,
-                        keywords=keywords
-                    )
+                    self.vosk_model = Model(model_name="vosk-model-small-en-us-0.15")
                 except Exception:
-                    # Fallback to just "jarvis" or "computer" if some fail
-                    self.porcupine = pvporcupine.create(
-                        access_key=PICOVOICE_ACCESS_KEY,
-                        keywords=["jarvis", "computer"]
-                    )
-                    
-                self.use_porcupine = True
-                print(f"✅ Porcupine loaded! Keywords: {keywords or 'Custom Model'}")
+                     print("   Downloading Vosk model...")
+                     self.vosk_model = Model(lang="en-us") 
+                
+                self.vosk_rec = KaldiRecognizer(self.vosk_model, 16000, '["hey jarvis", "[unk]"]')
+                self.use_vosk = True
+                self._is_loaded = True
+                print("✅ Vosk loaded! (Keyword: 'hey jarvis')")
                 return
             except Exception as e:
-                print(f"⚠️ Porcupine failed to load: {e}")
-                print("   Falling back to openWakeWord...")
-        
-        # Fallback to openWakeWord
-        print("🔄 Loading openWakeWord model...")
-        from openwakeword.model import Model
-        self.oww_model = Model(
-            wakeword_models=[WAKE_WORD_MODEL],
-            inference_framework="onnx"
-        )
-        print(f"✅ openWakeWord loaded: '{WAKE_WORD_MODEL}'")
-    
-    def process_audio(self, audio_chunk: bytes) -> bool:
-        """Process audio chunk and check for wake word"""
-        if self.use_porcupine and self.porcupine:
-            return self._process_porcupine(audio_chunk)
-        else:
-            return self._process_oww(audio_chunk)
+                print(f"⚠️ Vosk failed: {e}")
+            
+            print("❌ All wake word engines failed to load.")
 
-    def _process_porcupine(self, audio_chunk: bytes) -> bool:
-        """Process using Porcupine"""
-        # Porcupine expects int16 array
-        pcm = np.frombuffer(audio_chunk, dtype=np.int16)
+    def process_audio(self, audio_chunk: bytes) -> bool:
+        """Process audio chunk (will auto-load if not ready)"""
+        if not self._is_loaded:
+            if not self._loading_lock.locked():
+                threading.Thread(target=self.load_model, daemon=True).start()
+            return False
+
+        self._chunk_counter += 1
+        if self._chunk_counter % 2 != 0:
+            return False
+
+        # Try Primary (openWakeWord)
+        if self.oww_model:
+            if self._process_oww(audio_chunk):
+                return True
         
-        # Porcupine requires exactly frame_length samples
-        # We might need to handle buffering if chunks don't match
-        # But for simplicity, we assume chunk size matches or we skip
-        # A better implementation would buffer.
-        # For now, we'll try to process what fits. 
-        # Note: Porcupine frame length is usually 512, which matches our CHUNK_SIZE
-        
-        try:
-            result = self.porcupine.process(pcm)
-            if result >= 0:
-                print("🎯 Wake word detected (Porcupine)!")
+        # Try Fallback (Vosk)
+        if self.use_vosk and self.vosk_rec:
+            if self._process_vosk(audio_chunk):
+                return True
+                
+        return False
+
+    def _process_vosk(self, audio_chunk: bytes) -> bool:
+        """Process using Vosk (Grammar Mode)"""
+        if self.vosk_rec.AcceptWaveform(audio_chunk):
+            res = self.vosk_rec.Result()
+            if "hey jarvis" in res:
+                print("🎯 Wake word detected (Vosk)!")
                 if self.on_wake:
                     self.on_wake()
                 return True
-        except Exception:
-            pass
-            
         return False
 
     def _process_oww(self, audio_chunk: bytes) -> bool:
@@ -107,16 +128,11 @@ class WakeWordDetector:
         if self.oww_model is None:
             self.load_model()
         
-        # Convert bytes to numpy array
         audio_data = np.frombuffer(audio_chunk, dtype=np.int16)
-        
-        # openWakeWord expects float32 normalized audio
         audio_float = audio_data.astype(np.float32) / 32768.0
         
-        # Run prediction
         prediction = self.oww_model.predict(audio_float)
         
-        # Check all wake word scores
         for model_name, score in self.oww_model.prediction_buffer.items():
             if len(score) > 0 and score[-1] > self.threshold:
                 print(f"🎯 Wake word detected! Score: {score[-1]:.3f}")
@@ -124,7 +140,6 @@ class WakeWordDetector:
                 if self.on_wake:
                     self.on_wake()
                 return True
-        
         return False
     
     def reset(self):

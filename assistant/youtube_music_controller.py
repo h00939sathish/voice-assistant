@@ -2,9 +2,7 @@
 YouTube Music Controller - Background control using ytmusicapi
 """
 import logging
-import os
-import sys
-from typing import Optional, Dict, Any, List
+from typing import Optional
 from pathlib import Path
 
 logger = logging.getLogger(__name__)

@@ -4,5 +4,5 @@
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.CurrentDirectory = "c:\Users\h0093\Documents\new"
 
-' Run pythonw with the daemon script (pythonw = no console)
-WshShell.Run "pythonw wakeword_daemon.pyw", 0, False
+' Run pythonw with the main script (pythonw = no console)
+WshShell.Run "pythonw main.py", 0, False

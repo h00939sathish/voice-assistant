@@ -1,35 +1,48 @@
 """
 LLM Router - Handles local (Ollama) and online (Groq, Nvidia, OpenRouter, Gemini) models
 """
+
 import ollama
 from google import genai
 from groq import Groq
 from openai import OpenAI
-from typing import Optional, Generator, List, Dict
+from typing import Optional, List, Dict, Any
 import sys
 import os
+import asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
-    OLLAMA_MODEL, GEMINI_API_KEY, GEMINI_MODEL, GROQ_API_KEY,
-    OPENROUTER_API_KEY, OPENROUTER_MODEL,
-    NVIDIA_API_KEY, NVIDIA_MODEL,
-    LMSTUDIO_HOST, LMSTUDIO_MODEL
+    OLLAMA_MODEL,
+    GEMINI_MODEL,
+    OPENROUTER_MODEL,
+    NVIDIA_MODEL,
+    LMSTUDIO_MODEL,
+    MEMORY_MIN_CONFIDENCE,
+    MEMORY_MAX_RESULTS,
 )
 from assistant.personality import SYSTEM_PROMPT
-from assistant.conversation_memory import ConversationMemory
+from assistant.fact_extractor import FactExtractor
+from assistant.interfaces import ILLMProvider
 
 
-class LLMRouter:
-    """Routes between multiple LLM providers with fallback logic"""
-    
-    def __init__(self, prefer_local: bool = True):
+class LLMRouter(ILLMProvider):
+    """Routes between multiple LLM providers with fallback logic cache"""
+
+    def __init__(self, conversation_memory=None, long_term_memory=None, prefer_local: bool = True):
         self.prefer_local = prefer_local
-        self.max_history = 10
-        self.memory = ConversationMemory(max_messages=self.max_history * 2) # Keep slightly more in history
+        self.conversation_memory = conversation_memory
+        self.long_term_memory = long_term_memory
+        
         self._ollama_available: Optional[bool] = None
         self._ollama_model_name = OLLAMA_MODEL
-        
+        # FactExtractor needs both memory types
+        self.fact_extractor = FactExtractor(
+            self, 
+            conversation_memory=self.conversation_memory, 
+            long_term_memory=self.long_term_memory
+        ) if self.long_term_memory else None
+
         # Clients
         self._gemini_client: Optional[genai.Client] = None
         self._groq_client: Optional[Groq] = None
@@ -37,241 +50,313 @@ class LLMRouter:
         self._nvidia_client: Optional[OpenAI] = None
         self._lmstudio_client: Optional[OpenAI] = None
         self._lmstudio_available: Optional[bool] = None
-        
+
+    # ... (check_ollama, check_lmstudio methods) ...
+    
     def _check_ollama(self) -> bool:
-        """Check if Ollama is available and find best model"""
+        """Check if Ollama is running"""
         if self._ollama_available is not None:
             return self._ollama_available
-        
         try:
-            response = ollama.list()
-            available_models = []
-            
-            # Helper to get name
-            def get_name(m):
-                if isinstance(m, dict):
-                    return m.get('name') or m.get('model')
-                return getattr(m, 'model', None) or getattr(m, 'name', None)
-
-            models_list = getattr(response, 'models', []) or response
-            for m in models_list:
-                name = get_name(m)
-                if name:
-                    available_models.append(name)
-            
-            print(f"   ✅ Ollama available. Models: {available_models}")
-            
-            if any(self._ollama_model_name in m for m in available_models):
-                # Ensure we use the exact model name found (e.g., 'llama3.2:3b' instead of 'llama3.2')
-                match = next((m for m in available_models if self._ollama_model_name in m), self._ollama_model_name)
-                self._ollama_model_name = match
-                self._ollama_available = True
-                return True
-            
-            fallbacks = ["phi3", "mistral", "llama3", "gemma", "qwen", "tinyllama"]
-            for fallback in fallbacks:
-                match = next((m for m in available_models if fallback in m), None)
-                if match:
-                    print(f"   ⚠️ '{self._ollama_model_name}' not found, switching to '{match}'")
-                    self._ollama_model_name = match
-                    self._ollama_available = True
-                    return True
-            
-            if available_models:
-                 self._ollama_model_name = available_models[0]
-                 self._ollama_available = True
-                 return True
-
+            ollama.list()
+            self._ollama_available = True
+        except:
             self._ollama_available = False
-            return False
-            
-        except Exception as e:
-            print(f"   ⚠️ Ollama check failed: {e}")
-            self._ollama_available = False
-            return False
+        return self._ollama_available
 
     def _check_lmstudio(self) -> bool:
-        """Check if LM Studio is available"""
+        """Check if LM Studio is running"""
         if self._lmstudio_available is not None:
             return self._lmstudio_available
-        
         try:
-            # Initialize LM Studio client
-            self._lmstudio_client = OpenAI(
-                base_url=LMSTUDIO_HOST,
-                api_key="lm-studio"  # LM Studio doesn't require a real key
-            )
-            # Test connection by listing models
-            models = self._lmstudio_client.models.list()
-            if models.data:
-                model_names = [m.id for m in models.data]
-                print(f"   ✅ LM Studio available. Models: {model_names}")
-                self._lmstudio_available = True
-                return True
-            self._lmstudio_available = False
-            return False
-        except Exception as e:
-            print(f"   ⚠️ LM Studio not available: {e}")
-            self._lmstudio_available = False
-            return False
+            # Simple connection check
+            import requests
+            requests.get(f"{LMSTUDIO_HOST}/v1/models", timeout=1)
+            self._lmstudio_available = True
             
+            # Init client on first success
+            if not self._lmstudio_client:
+                 self._lmstudio_client = OpenAI(base_url=f"{LMSTUDIO_HOST}/v1", api_key="lm-studio")
+                 
+        except:
+            self._lmstudio_available = False
+        return self._lmstudio_available
+
     def _configure_online(self):
-        """Lazy load online clients"""
-        if not self._groq_client and GROQ_API_KEY:
-            try:
-                self._groq_client = Groq(api_key=GROQ_API_KEY)
-            except Exception as e: print(f"⚠️ Groq Init: {e}")
-
-        if not self._nvidia_client and NVIDIA_API_KEY:
-            try:
-                self._nvidia_client = OpenAI(
-                    base_url="https://integrate.api.nvidia.com/v1",
-                    api_key=NVIDIA_API_KEY
-                )
-            except Exception as e: print(f"⚠️ Nvidia Init: {e}")
-
-        if not self._openrouter_client and OPENROUTER_API_KEY:
-            try:
-                self._openrouter_client = OpenAI(
-                    base_url="https://openrouter.ai/api/v1",
-                    api_key=OPENROUTER_API_KEY
-                )
-            except Exception as e: print(f"⚠️ OpenRouter Init: {e}")
-
-        if not self._gemini_client and GEMINI_API_KEY:
-            try:
-                self._gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-            except Exception as e: print(f"⚠️ Gemini Init: {e}")
-
-    def _build_messages(self, user_message: str) -> List[Dict[str, str]]:
-        """Build message list with conversation history"""
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        # Load history from memory
-        for msg in self.memory.get_recent(self.max_history):
-            messages.append(msg)
+        """Initialize online providers if keys exist"""
+        if not self._groq_client and os.getenv("GROQ_API_KEY"):
+            self._groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
         
+        if not self._gemini_client and os.getenv("GEMINI_API_KEY"):
+            self._gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+        if not self._nvidia_client and os.getenv("NVIDIA_API_KEY"):
+             self._nvidia_client = OpenAI(
+                base_url="https://integrate.api.nvidia.com/v1",
+                api_key=os.getenv("NVIDIA_API_KEY")
+            )
+            
+        if not self._openrouter_client and os.getenv("OPENROUTER_API_KEY"):
+            self._openrouter_client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=os.getenv("OPENROUTER_API_KEY"),
+            )
+
+    # Helper method for _check_ollama and others...
+    # (Using the original methods, just truncated for replacement)
+
+    def _build_messages(self, user_message: str, history: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """Build message list with conversation history and relevant memories"""
+        memory_prompt = ""
+
+        # Search long-term memory for relevant context
+        if self.long_term_memory:
+            try:
+                # Search for memories relevant to the current query
+                relevant_memories = self.long_term_memory.search(
+                    query=user_message,
+                    limit=MEMORY_MAX_RESULTS,
+                    min_confidence=MEMORY_MIN_CONFIDENCE
+                )
+
+                if relevant_memories:
+                    memory_lines = []
+                    for mem in relevant_memories:
+                        memory_lines.append(f"- {mem.content}")
+                    memory_prompt = "\n\nRELEVANT MEMORIES:\n" + "\n".join(memory_lines)
+            except Exception:
+                pass  
+
+        # Build messages
+        messages = [{"role": "system", "content": SYSTEM_PROMPT + memory_prompt}]
+
+        # Load recent conversation history (provided by caller)
+        if history:
+            messages.extend(history)
+
         messages.append({"role": "user", "content": user_message})
         return messages
-    
-    def chat(self, user_message: str) -> str:
+
+    async def chat(
+        self, user_message: str, history: Optional[List[Dict[str, str]]] = None
+    ) -> str:
         """Route message through available providers"""
         response = None
         self._configure_online()
-        
-        # 1. Ollama (Local - Speed/Primary)
+
+        # Get Tools
+        from assistant.skills_registry import registry
+        tools = registry.get_tool_definitions()
+
+        # 1. Ollama (Local - Speed/Primary) - Supports Tools
         if self.prefer_local and self._check_ollama():
-            response = self._chat_ollama(user_message)
-        
+            response = await self._chat_ollama(user_message, history, tools)
+
         # 2. LM Studio (Local - Reasoning/Fallback)
         if response is None and self.prefer_local and self._check_lmstudio():
-            response = self._chat_lmstudio(user_message)
-        
-        # 2. Groq (Speed)
-        if response is None:
-            response = self._chat_groq(user_message)
+            response = await self._chat_lmstudio(user_message, history)
 
-        # 3. Nvidia (Power)
-        if response is None:
-            response = self._chat_nvidia(user_message)
+        # 3. Groq (Fastest Cloud)
+        if response is None and self._groq_client:
+            response = await self._chat_groq(user_message, history)
 
-        # 4. OpenRouter (Flexibility)
-        if response is None:
-            response = self._chat_openrouter(user_message)
+        # 4. Nvidia (Strong Cloud)
+        if response is None and self._nvidia_client:
+            response = await self._chat_nvidia(user_message, history)
 
-        # 5. Gemini (Context/Safety)
-        if response is None:
-            response = self._chat_gemini(user_message)
-        
+        # 5. OpenRouter (Aggregation)
+        if response is None and self._openrouter_client:
+            response = await self._chat_openrouter(user_message, history)
+
+        # 6. Gemini (Google/Multimodal)
+        if response is None and self._gemini_client:
+            response = await self._chat_gemini(user_message, history)
+
         # Final Failure
         if response is None:
             return "All my brain connections are down. Please check your internet and API keys."
-        
-        # Update history (Persisted)
-        self.memory.add_exchange(user_message, response)
+
+        # Fact Extraction (Async Side Effect)
+        if self.fact_extractor:
+            try:
+                # Fire and forget task
+                asyncio.create_task(self.fact_extractor.extract_facts_async(user_message, response))
+            except Exception as e:
+                print(f"   [!] Fact Extraction Trigger Failed: {e}")
+            
         return response
-    
-    def _chat_lmstudio(self, user_message: str) -> Optional[str]:
+
+    async def _chat_lmstudio(self, user_message: str, history: List[Dict[str, str]]) -> Optional[str]:
         """Chat with LM Studio (OpenAI-compatible API)"""
         if not self._lmstudio_client:
             return None
         try:
-            messages = self._build_messages(user_message)
-            completion = self._lmstudio_client.chat.completions.create(
+            messages = self._build_messages(user_message, history)
+            # Run blocking call in thread
+            completion = await asyncio.to_thread(
+                self._lmstudio_client.chat.completions.create,
                 model=LMSTUDIO_MODEL,
+                messages=messages,
+                temperature=0.7,
+                max_tokens=1024,
+            )
+            return completion.choices[0].message.content
+        except Exception as e:
+            print(f"   [!] LM Studio: {e}")
+            self._lmstudio_available = False
+            return None
+
+    async def _chat_ollama(self, user_message: str, history: List[Dict[str, str]], tools: List[Dict] = None) -> Optional[str]:
+        try:
+            messages = self._build_messages(user_message, history)
+            
+            # 1. Call Ollama
+            response = await asyncio.to_thread(
+                ollama.chat,
+                model=self._ollama_model_name,
+                messages=messages,
+                tools=tools if tools else None
+            )
+            
+            message = response["message"]
+            
+            # 2. Check for Tool Calls
+            if message.get("tool_calls"):
+                print(f"   🛠️ Tool Calls detected: {len(message['tool_calls'])}")
+                
+                # Append assistant's tool call message to history
+                messages.append(message)
+                
+                from assistant.skills_registry import registry
+                
+                # Execute tools
+                for tool in message["tool_calls"]:
+                    fn_name = tool["function"]["name"]
+                    args = tool["function"]["arguments"]
+                    print(f"   🔨 Executing {fn_name}({args})")
+                    
+                    instance = registry.create_instance(fn_name)
+                    if instance:
+                         context = {} # Can inject context here if needed
+                         result = await instance.handle_tool_call(args, context=context)
+                    else:
+                         result = f"Error: Skill {fn_name} not found."
+                    
+                    # Add result to messages
+                    messages.append({
+                        "role": "tool",
+                        "content": str(result),
+                    })
+
+                # 3. Final Response with Tool Outputs
+                final_response = await asyncio.to_thread(
+                    ollama.chat,
+                    model=self._ollama_model_name,
+                    messages=messages
+                )
+                return final_response["message"]["content"]
+
+            return message["content"]
+        except Exception as e:
+            print(f"   [!] Ollama: {e}")
+            self._ollama_available = False
+            return None
+
+    async def _chat_groq(self, user_message: str, history: List[Dict[str, str]]) -> Optional[str]:
+        if not self._groq_client:
+            return None
+        try:
+            messages = self._build_messages(user_message, history)
+            completion = await asyncio.to_thread(
+                self._groq_client.chat.completions.create,
+                model="llama-3.1-8b-instant",
+                messages=messages,
+                temperature=0.7,
+                max_tokens=1024,
+            )
+            return completion.choices[0].message.content
+        except Exception as e:
+            print(f"   [!] Groq: {e}")
+            return None
+
+    async def _chat_nvidia(self, user_message: str, history: List[Dict[str, str]]) -> Optional[str]:
+        if not self._nvidia_client:
+            return None
+        try:
+            messages = self._build_messages(user_message, history)
+            completion = await asyncio.to_thread(
+                self._nvidia_client.chat.completions.create,
+                model=NVIDIA_MODEL,
                 messages=messages,
                 temperature=0.7,
                 max_tokens=1024
             )
             return completion.choices[0].message.content
         except Exception as e:
-            print(f"   ⚠️ LM Studio: {e}")
-            self._lmstudio_available = False
-            return None
-    
-    def _chat_ollama(self, user_message: str) -> Optional[str]:
-        try:
-            messages = self._build_messages(user_message)
-            response = ollama.chat(model=self._ollama_model_name, messages=messages)
-            return response['message']['content']
-        except Exception as e:
-            print(f"   ⚠️ Ollama: {e}")
-            self._ollama_available = False
+            print(f"   [!] Nvidia: {e}")
             return None
 
-    def _chat_groq(self, user_message: str) -> Optional[str]:
-        if not self._groq_client: return None
-        try:
-            messages = self._build_messages(user_message)
-            completion = self._groq_client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=messages, temperature=0.7, max_tokens=1024
-            )
-            return completion.choices[0].message.content
-        except Exception as e:
-            print(f"   ⚠️ Groq: {e}")
+    async def _chat_openrouter(self, user_message: str, history: List[Dict[str, str]]) -> Optional[str]:
+        if not self._openrouter_client:
             return None
-
-    def _chat_nvidia(self, user_message: str) -> Optional[str]:
-        if not self._nvidia_client: return None
         try:
-            messages = self._build_messages(user_message)
-            completion = self._nvidia_client.chat.completions.create(
-                model=NVIDIA_MODEL,
-                messages=messages, temperature=0.7, max_tokens=1024
-            )
-            return completion.choices[0].message.content
-        except Exception as e:
-            print(f"   ⚠️ Nvidia: {e}")
-            return None
-
-    def _chat_openrouter(self, user_message: str) -> Optional[str]:
-        if not self._openrouter_client: return None
-        try:
-            messages = self._build_messages(user_message)
-            completion = self._openrouter_client.chat.completions.create(
+            messages = self._build_messages(user_message, history)
+            completion = await asyncio.to_thread(
+                self._openrouter_client.chat.completions.create,
                 model=OPENROUTER_MODEL,
                 messages=messages,
                 extra_headers={"HTTP-Referer": "https://github.com/buddy-assistant"},
             )
             return completion.choices[0].message.content
         except Exception as e:
-            print(f"   ⚠️ OpenRouter: {e}")
+            print(f"   [!] OpenRouter: {e}")
             return None
 
-    def _chat_gemini(self, user_message: str) -> Optional[str]:
-        if not self._gemini_client: return None
+    async def _chat_gemini(self, user_message: str, history: List[Dict[str, str]]) -> Optional[str]:
+        if not self._gemini_client:
+            return None
         try:
-            # Reconstruct history from memory for Gemini
-            history_text = self.memory.get_summary_context()
+            # Reconstruct history from argument
+            history_text = ""
+            if history:
+                history_text = "\n".join([f"{msg['role'].capitalize()}: {msg['content']}" for msg in history])
             
-            full_prompt = f"{SYSTEM_PROMPT}\n\nPrevious conversation:\n{history_text}\n\nUser: {user_message}\nAssistant:"
-            response = self._gemini_client.models.generate_content(
-                model=GEMINI_MODEL, contents=full_prompt
+            # Build memory prompt (same logic as _build_messages)
+            memory_prompt = ""
+            if self.long_term_memory:
+                try:
+                    relevant_memories = self.long_term_memory.search(
+                        query=user_message,
+                        limit=5,
+                        min_confidence=0.7
+                    )
+                    if relevant_memories:
+                        memory_lines = [f"- {m.content}" for m in relevant_memories]
+                        memory_prompt = "\n\nRELEVANT MEMORIES:\n" + "\n".join(memory_lines)
+                except Exception:
+                    pass
+
+            full_prompt = f"{SYSTEM_PROMPT}{memory_prompt}\n\nPrevious conversation:\n{history_text}\n\nUser: {user_message}\nAssistant:"
+            
+            response = await asyncio.to_thread(
+                self._gemini_client.models.generate_content,
+                model=GEMINI_MODEL,
+                contents=full_prompt
             )
             return response.text
         except Exception as e:
-            print(f"   ⚠️ Gemini: {e}")
+            print(f"   [!] Gemini: {e}")
             return None
-    
+
     def clear_history(self):
-        self.memory.clear()
+        """Deprecated: Logic logic removed. Handled by Main."""
+        pass
+
+    def get_memory_stats(self) -> Dict[str, Any]:
+        """Get memory statistics for debugging/monitoring"""
+        stats = {}
+        if self.long_term_memory:
+            ltm_stats = self.long_term_memory.get_stats()
+            stats["long_term"] = ltm_stats
+        return stats
+

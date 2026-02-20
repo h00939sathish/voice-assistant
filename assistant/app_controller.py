@@ -268,8 +268,10 @@ class AppController:
             logger.info(f"Found match: {match} -> {path}")
             try:
                 if path.startswith("shell:"):
-                    # UWP apps
-                    subprocess.run(["start", path], shell=True, check=True)
+                    # UWP apps - use explorer.exe to launch safely
+                    # "explorer.exe" is a standard Windows executable, so full path isn't strictly needed if in PATH,
+                    # but using the command directly avoids shell=True.
+                    subprocess.run(["explorer.exe", path], check=True, shell=False)
                 else:
                     # Normal apps
                     os.startfile(path)

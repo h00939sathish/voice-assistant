@@ -24,12 +24,12 @@ CHUNK_SIZE = 512  # ~32ms at 16kHz
 
 # Wake word settings
 WAKE_WORD_MODEL = "hey_jarvis"  # Built-in openWakeWord model
-WAKE_WORD_THRESHOLD = float(os.getenv("WAKE_WORD_THRESHOLD", "0.5"))
+WAKE_WORD_THRESHOLD = float(os.getenv("WAKE_WORD_THRESHOLD", "0.4"))
 
 # Porcupine settings
 PICOVOICE_ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY", "")
-# Path to custom .ppn file (if any)
-PORCUPINE_KEYWORD_PATH = r"c:\Users\h0093\Documents\new\HEY-JARVIS_en_windows_v4_0_0\HEY-JARVIS_en_windows_v4_0_0.ppn"
+# Path to custom .ppn file (relative to project root)
+PORCUPINE_KEYWORD_PATH = BASE_DIR / "HEY-JARVIS_en_windows_v4_0_0" / "HEY-JARVIS_en_windows_v4_0_0.ppn"
 
 # STT settings (faster-whisper)
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
@@ -86,9 +86,30 @@ MCP_SERVERS = {
     # "context7": { ... } # User needs to provide path
     "github": {
         "command": "uvx",
-        "args": ["mcp-server-github"] 
+        "args": ["mcp-server-github"],
+        "env": {
+            **os.environ,
+            "GITHUB_PERSONAL_ACCESS_TOKEN": os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN", ""),
+            "GITHUB_TOKEN": os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN", "") # Try both common names
+        }
     }
 }
 
 # Assistant personality
 ASSISTANT_NAME = "Buddy"
+
+# Long-term Memory Settings
+ENABLE_LONG_TERM_MEMORY = True
+MEMORY_DB_PATH = "data/memory.db"  # Path to long-term memory database
+MEMORY_MIN_CONFIDENCE = 0.7  # Minimum confidence for memory retrieval
+MEMORY_MAX_RESULTS = 5  # Maximum memories to include in context
+
+# Proactive Intelligence Settings
+PROACTIVE_SETTINGS = {
+    "ENABLED": True,
+    "CHECK_INTERVAL": 60,  # Check every 60 seconds
+    "BATTERY_THRESHOLD": 20,  # Warn if battery < 20%
+    "IDLE_THRESHOLD": 3600,  # 1 hour in seconds
+    "MORNING_HOUR": 8,  # Morning greeting start hour
+    "NIGHT_HOUR": 22,   # Night mode suggestion hour
+}

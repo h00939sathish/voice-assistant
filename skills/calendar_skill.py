@@ -4,42 +4,71 @@ Calendar Skill - Google Calendar integration
 import logging
 import os.path
 import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from skills.base_skill import BaseSkill, skill
 
 logger = logging.getLogger(__name__)
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cache")
 
-class CalendarSkill:
+@skill(
+    name="calendar",
+    keywords=["calendar", "schedule", "events", "meeting", "appointment", "agenda"],
+    description="Manage your Google Calendar: list events and create new meetings with conflict detection",
+    priority=6,
+    requires_internet=True,
+    parameters={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["list", "create", "check_conflicts"],
+                "description": "The action to perform on the calendar"
+            },
+            "summary": {
+                "type": "string",
+                "description": "Brief description of the event (required for create)"
+            },
+            "start_time": {
+                "type": "string",
+                "description": "ISO format start time (e.g., 2026-02-17T15:00:00)"
+            },
+            "duration_minutes": {
+                "type": "integer",
+                "description": "Duration of the event in minutes",
+                "default": 30
+            }
+        },
+        "required": ["action"]
+    }
+)
+class CalendarSkill(BaseSkill):
     """
-    Reads and creates Google Calendar events.
+    Enhanced Calendar Skill with Creation and Conflict Detection.
     """
     
     def __init__(self):
-        self.keywords = ["calendar", "schedule", "events", "meeting", "appointment"]
+        super().__init__()
         self.creds = None
         self.service = None
         self._auth_completed = False
         
-        # Try to authenticate on startup
+        # Try to authenticate on startup (silently)
         try:
             self._authenticate(interactive=False)
-        except Exception as e:
-            logger.warning(f"Calendar auth failed (expected for first run): {e}")
+        except Exception:
+            pass
 
     def _authenticate(self, interactive=True):
         """Authenticate with Google Calendar API"""
         token_path = os.path.join(CACHE_DIR, 'token.json')
-        creds_path = 'credentials.json' # User must provide this
+        creds_path = 'credentials.json'
         
         if os.path.exists(token_path):
             self.creds = Credentials.from_authorized_user_file(token_path, SCOPES)
@@ -49,7 +78,7 @@ class CalendarSkill:
                 self.creds.refresh(Request())
             else:
                 if not interactive:
-                    raise Exception("Auth required")
+                    return # Skip silent fail
                     
                 if not os.path.exists(creds_path):
                     raise FileNotFoundError("credentials.json not found. Please download it from Google Cloud Console.")
@@ -57,7 +86,6 @@ class CalendarSkill:
                 flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
                 self.creds = flow.run_local_server(port=0)
                 
-            # Save the credentials for the next run
             with open(token_path, 'w') as token:
                 token.write(self.creds.to_json())
                 
@@ -65,35 +93,43 @@ class CalendarSkill:
         self._auth_completed = True
         logger.info("✅ Google Calendar connected")
 
-    async def handle(self, text: str, context: Dict[str, Any]) -> str:
-        """Handle calendar commands"""
+    async def handle_tool_call(self, args: dict, context: Any) -> str:
+        """Handle structured tool calls from LLM."""
         if not self._auth_completed:
-            # Check if we have credentials.json
-            if not os.path.exists('credentials.json'):
-                return "I need a 'credentials.json' file to access your calendar. Please download it from Google Cloud Console."
-            
-            try:
-                self._authenticate(interactive=True)
-            except Exception as e:
-                return f"Authentication failed: {e}"
+            return "Calendar is not authenticated. Please run the assistant interactively to sign in."
 
-        text = text.lower()
+        action = args.get("action")
+        if action == "list":
+            return self._list_events()
+        elif action == "create":
+            summary = args.get("summary")
+            start_str = args.get("start_time")
+            duration = args.get("duration_minutes", 30)
+            if not summary or not start_str:
+                return "I need a summary and start time to create an event."
+            return await self._create_event(summary, start_str, duration)
         
-        # List events
-        if "what" in text or "list" in text or "show" in text:
+        return "Unknown calendar action."
+
+    async def handle(self, text: str, context: Dict[str, Any]) -> str:
+        """Fallback handle for direct keyword triggers."""
+        if not self._auth_completed:
+            return "I need to authenticate your Google Calendar. Please check your terminal for the login link."
+
+        text_lower = text.lower()
+        
+        if any(k in text_lower for k in ["what", "list", "show", "agenda"]):
             return self._list_events()
             
-        # Create event (simple parsing)
-        if "create" in text or "add" in text or "schedule" in text:
-            # Very basic parsing: "schedule meeting [summary] at [time]"
-            return "I can't create events yet via voice, but I can read your schedule!"
+        if any(k in text_lower for k in ["create", "add", "schedule"]):
+            return "I can help you schedule that. What's the meeting about and when should it start?"
             
-        return "I can list your upcoming events. Just say 'What's on my calendar?'"
+        return "I can manage your calendar. Try asking 'What's on my agenda?' or 'Schedule a meeting for tomorrow at 2pm'."
 
     def _list_events(self) -> str:
         """List next 5 upcoming events"""
         try:
-            now = datetime.datetime.utcnow().isoformat() + 'Z' # 'Z' indicates UTC time
+            now = datetime.datetime.utcnow().isoformat() + 'Z'
             events_result = self.service.events().list(
                 calendarId='primary', timeMin=now,
                 maxResults=5, singleEvents=True,
@@ -102,16 +138,15 @@ class CalendarSkill:
             events = events_result.get('items', [])
 
             if not events:
-                return 'No upcoming events found.'
+                return 'No upcoming events found on your calendar.'
 
             response = "Here are your next 5 events: "
             for event in events:
                 start = event['start'].get('dateTime', event['start'].get('date'))
-                # Parse date to readable format
                 try:
                     dt = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
                     time_str = dt.strftime("%A at %I:%M %p")
-                except:
+                except (ValueError, AttributeError):
                     time_str = start
                     
                 response += f"{event['summary']} on {time_str}. "
@@ -119,5 +154,48 @@ class CalendarSkill:
             return response
             
         except Exception as e:
-            logger.error(f"Calendar error: {e}")
+            logger.error(f"Calendar list error: {e}")
             return "I had trouble checking your calendar."
+
+    async def _create_event(self, summary: str, start_time_str: str, duration_minutes: int) -> str:
+        """Create a calendar event with conflict detection."""
+        try:
+            # Parse start time
+            start_dt = datetime.datetime.fromisoformat(start_time_str)
+            end_dt = start_dt + datetime.timedelta(minutes=duration_minutes)
+            
+            # 1. Check for conflicts
+            conflicts = self._check_conflicts(start_dt, end_dt)
+            if conflicts:
+                return f"Conflict detected! You already have '{conflicts[0]}' scheduled during that time. Should I schedule it anyway?"
+
+            # 2. Create event
+            event = {
+                'summary': summary,
+                'start': {'dateTime': start_dt.isoformat(), 'timeZone': 'UTC'},
+                'end': {'dateTime': end_dt.isoformat(), 'timeZone': 'UTC'},
+            }
+            
+            created_event = self.service.events().insert(calendarId='primary', body=event).execute()
+            return f"Meeting '{summary}' has been successfully scheduled for {start_dt.strftime('%A at %I:%M %p')}."
+
+        except Exception as e:
+            logger.error(f"Calendar create error: {e}")
+            return f"Failed to create event: {e}"
+
+    def _check_conflicts(self, start_dt: datetime.datetime, end_dt: datetime.datetime) -> List[str]:
+        """Check for overlapping events."""
+        try:
+            # Buffer window
+            events_result = self.service.events().list(
+                calendarId='primary',
+                timeMin=start_dt.isoformat() + 'Z',
+                timeMax=end_dt.isoformat() + 'Z',
+                singleEvents=True
+            ).execute()
+            
+            events = events_result.get('items', [])
+            return [e['summary'] for e in events]
+        except Exception:
+            return []
+

@@ -4,17 +4,18 @@ Audio Manager - Handles microphone input and speaker output
 import numpy as np
 import sounddevice as sd
 import queue
-import threading
 from typing import Optional, Generator
 import sys
 import os
+
+from assistant.interfaces import IAudioManager
 
 # Add parent to path for config
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import SAMPLE_RATE, CHANNELS, CHUNK_SIZE
 
 
-class AudioManager:
+class AudioManager(IAudioManager):
     """Manages audio input/output streams"""
     
     def __init__(self):
@@ -30,6 +31,12 @@ class AudioManager:
         if status:
             print(f"Audio status: {status}")
         if self.is_recording:
+            # Buffer overflow protection: drop oldest if queue too large
+            if self.audio_queue.qsize() > 100:
+                try:
+                    self.audio_queue.get_nowait()
+                except queue.Empty:
+                    pass
             # Convert to int16 for compatibility
             audio_data = (indata[:, 0] * 32767).astype(np.int16)
             self.audio_queue.put(audio_data.tobytes())

@@ -1,7 +1,6 @@
 import logging
 import os
 import subprocess
-import threading
 from typing import Dict, Any
 from skills.base_skill import BaseSkill
 
@@ -44,7 +43,8 @@ class WaifuSkill(BaseSkill):
             self.process = subprocess.Popen(
                 [python_exe, "jarvis_runner.py"],
                 cwd=cwd,
-                creationflags=subprocess.CREATE_NEW_CONSOLE # Open in new window
+                creationflags=subprocess.CREATE_NEW_CONSOLE, # Open in new window
+                shell=False
             )
             
             return "Launching Desktop Waifu interface... Please ensure VTube Studio is running!"
