@@ -40,12 +40,17 @@ class ConversationMemory:
         self._init_db()
         
     def _get_connection(self) -> sqlite3.Connection:
-        """Get thread-safe DB connection"""
-        return sqlite3.connect(
-            str(self.db_path), 
+        """Get thread-safe DB connection with performance optimizations"""
+        conn = sqlite3.connect(
+            str(self.db_path),
             check_same_thread=False,
             timeout=10.0
         )
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=-2048")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        return conn
 
     def _init_db(self):
         """Initialize database schema"""
