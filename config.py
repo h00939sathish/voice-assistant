@@ -99,6 +99,9 @@ SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/
 TTS_VOICE = os.getenv("TTS_VOICE", "en-US-AriaNeural")
 TTS_RATE = "+0%"
 TTS_PITCH = "+0Hz"
+TTS_USE_OFFLINE = os.getenv("TTS_USE_OFFLINE", "true").lower() == "true"
+TTS_OFFLINE_VOICE = os.getenv("TTS_OFFLINE_VOICE", "en_GB-alan-medium")
+PIPER_VOICE_PATH = os.getenv("PIPER_VOICE_PATH", "")  # Path to .onnx model file
 
 # MCP Server Configuration - Keep only essential servers
 # Unused: http, workflow, google, browser (covered by browser_skill)
