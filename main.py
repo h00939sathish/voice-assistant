@@ -8,40 +8,63 @@ import os
 import time
 import threading
 import asyncio
-from enum import Enum, auto
 from pathlib import Path
 from typing import Callable, Optional, List, Dict
 
-# Add project root to path
+if os.name == "nt":
+    try:
+        _cwd = os.getcwd()
+        if _cwd.startswith("\\\\?\\"):
+            os.chdir(_cwd[4:])
+        sys.path = [
+            p[4:] if isinstance(p, str) and p.startswith("\\\\?\\") else p
+            for p in sys.path
+        ]
+    except Exception:
+        pass
+
+if sys.stdout and getattr(sys.stdout, "encoding", "").lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr and getattr(sys.stderr, "encoding", "").lower() != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import ASSISTANT_NAME, SOUNDS_DIR
+from config import (
+    ASSISTANT_NAME,
+    SOUNDS_DIR,
+    WAKE_WORD_STARTUP_ENABLED,
+    ORB_IDLE_HIDE_AFTER,
+    MIC_IDLE_RELEASE_AFTER,
+    LOW_MEMORY_MODE,
+    LOW_MEMORY_UNLOAD_DELAY_SEC,
+    MIN_COMMAND_CONFIDENCE,
+)
 from assistant.logger import setup_logger, get_logger
-from assistant.audio_manager import AudioManager
-from assistant.wake_word import WakeWordDetector
-from assistant.stt import SpeechToText
-from assistant.tts import TextToSpeech
-from assistant.llm_router import LLMRouter
-from assistant.skill_response import SkillResponse
-from assistant.skill_router import SkillRouter
-from assistant.health_monitor import get_monitor
-from assistant.conversation_memory import ConversationMemory
-from assistant.long_term_memory import LongTermMemory
-from assistant.orb_overlay import OrbOverlay, OrbState  # New Overlay
+from assistant.state_machine import AssistantState
+from assistant.cli_parser import parse_args
+from assistant.app_init import (
+    setup_dependencies,
+    init_audio_system,
+    preload_components,
+    init_proactive_engine,
+    start_dashboard,
+)
+from assistant.orb_overlay import OrbOverlay, OrbState
 from gui.tray import SystemTrayApp
-from assistant.di import container
-from assistant.interfaces import IAudioManager, ISTTProvider, ITTSProvider, ILLMProvider
-from assistant.events import EventBus, StateChangeEvent, TranscriptionEvent, ResponseEvent
+from assistant.events import (
+    EventBus,
+    StateChangeEvent,
+    TranscriptionEvent,
+    ResponseEvent,
+    StatusEvent,
+    ConfirmationEvent,
+    SubsystemStateEvent,
+)
+from assistant.dashboard_bridge import DashboardBridge
+from assistant.health_monitor import get_monitor
 
 logger = get_logger("main")
-
-
-class AssistantState(Enum):
-    """Voice assistant states"""
-    IDLE = auto()
-    LISTENING = auto()
-    PROCESSING = auto()
-    SPEAKING = auto()
 
 
 class VoiceAssistant:
@@ -72,27 +95,34 @@ class VoiceAssistant:
         "remind me": "create reminder",
     }
 
-    def __init__(self, 
-                 audio: IAudioManager, 
-                 stt: ISTTProvider, 
-                 tts: ITTSProvider, 
-                 llm: ILLMProvider,
-                 skill_router: SkillRouter,
-                 event_bus: EventBus) -> None:
+    def __init__(self, audio, stt, tts, llm, skill_router, event_bus) -> None:
         self.state: AssistantState = AssistantState.IDLE
         self._running: bool = False
         self._wake_triggered: bool = False
         self._last_activity: float = time.time()
-        self._ambient_timeout: float = 30.0  # Seconds before returning to idle
+        self._ambient_timeout: float = 30.0
         self._keyboard_available: bool = False
-        self.monitor = get_monitor()
+        self.monitor = None
         self.ui_callback: Optional[Callable] = None
-        self.memory: ConversationMemory = ConversationMemory()
-        self.long_term_memory: LongTermMemory = LongTermMemory()
-        self.proactive_engine = None # Will init later
-        self.wake_detector = None # Will be initialized in background
+        self.memory = None
+        self.long_term_memory = None
+        self.proactive_engine = None
+        self.wake_detector = None
+        self.orb = None
+        self._wake_word_enabled: bool = WAKE_WORD_STARTUP_ENABLED
+        if LOW_MEMORY_MODE:
+            self._wake_word_enabled = True
+        self._idle_since: float = time.time()
+        self._idle_hide_after: float = ORB_IDLE_HIDE_AFTER
+        self._mic_idle_release_after: float = MIC_IDLE_RELEASE_AFTER
+        self._followup_count: int = 0
+        self._orb_is_hidden: bool = True
+        self._mic_released: bool = True
+        self._low_memory_mode: bool = LOW_MEMORY_MODE
+        self._low_memory_unload_delay_sec: float = max(0.0, LOW_MEMORY_UNLOAD_DELAY_SEC)
+        self._stt_unload_timer: Optional[threading.Timer] = None
+        self._stt_unload_lock = threading.Lock()
 
-        # Dependencies
         self.audio = audio
         self.stt = stt
         self.tts = tts
@@ -100,6 +130,7 @@ class VoiceAssistant:
         self.skill_router = skill_router
         self.bus = event_bus
 
+        self.task_executor = None
         self._loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
         self._loop_thread: Optional[threading.Thread] = None
 
@@ -108,8 +139,70 @@ class VoiceAssistant:
     def set_ui_callback(self, callback: Callable) -> None:
         self.ui_callback = callback
 
+    def _ensure_mic_active(self) -> None:
+        try:
+            if not self.audio.is_stream_active:
+                self.audio.start_stream()
+            if not self.audio.is_recording:
+                self.audio.start_recording()
+            self._mic_released = False
+        except Exception as e:
+            logger.warning(f"Failed to activate microphone: {e}")
+
+    def _release_microphone(self) -> None:
+        if self._mic_released:
+            return
+        try:
+            self.audio.stop_recording()
+            self.audio.stop_stream()
+            self._mic_released = True
+            logger.debug("🎙️ Microphone released (idle mode)")
+        except Exception as e:
+            logger.warning(f"Failed to release microphone: {e}")
+
+    def _cancel_stt_unload(self) -> None:
+        if not self._low_memory_mode:
+            return
+        with self._stt_unload_lock:
+            if self._stt_unload_timer is not None:
+                self._stt_unload_timer.cancel()
+                self._stt_unload_timer = None
+
+    def _schedule_stt_unload(self) -> None:
+        if not self._low_memory_mode:
+            return
+        self._cancel_stt_unload()
+
+        def _unload_if_idle():
+            try:
+                if self.state == AssistantState.IDLE and hasattr(
+                    self.stt, "unload_models"
+                ):
+                    self.stt.unload_models()
+                    logger.debug("Low-memory mode: STT unloaded while idle")
+            except Exception as e:
+                logger.debug(f"Low-memory mode: STT unload skipped ({e})")
+            finally:
+                with self._stt_unload_lock:
+                    self._stt_unload_timer = None
+
+        if self._low_memory_unload_delay_sec <= 0:
+            threading.Thread(target=_unload_if_idle, daemon=True).start()
+            return
+
+        timer = threading.Timer(self._low_memory_unload_delay_sec, _unload_if_idle)
+        timer.daemon = True
+        with self._stt_unload_lock:
+            self._stt_unload_timer = timer
+        timer.start()
+
+    def _warm_stt_async(self) -> None:
+        if not self._low_memory_mode:
+            return
+        if hasattr(self.stt, "reload_if_needed"):
+            threading.Thread(target=self.stt.reload_if_needed, daemon=True).start()
+
     def _apply_aliases(self, text: str) -> str:
-        """Apply command aliases to input"""
         lower_text = text.lower().strip()
         for alias, command in self.COMMAND_ALIASES.items():
             if alias in lower_text:
@@ -118,7 +211,6 @@ class VoiceAssistant:
         return text
 
     def _start_keyboard_listener(self) -> None:
-        """Start keyboard listener for hotkeys"""
         try:
             import keyboard
 
@@ -126,29 +218,60 @@ class VoiceAssistant:
                 if not self._wake_triggered:
                     logger.info("   ⌨️ Hotkey triggered wake")
                     self._wake_triggered = True
+                    self._ensure_mic_active()
+                    self._orb_is_hidden = False
+                    if self.orb:
+                        self.orb.set_state(OrbState.LISTENING.value)
+
+            def toggle_wake_word():
+                self._wake_word_enabled = not self._wake_word_enabled
+                status = "ON" if self._wake_word_enabled else "OFF"
+                logger.info(f"   ⌨️ Wake word toggled: {status}")
+                if self._wake_word_enabled:
+                    self._ensure_mic_active()
+                else:
+                    self._release_microphone()
+                    logger.info("   🎙️ Microphone released")
+                if self.orb:
+                    if self._wake_word_enabled:
+                        self.orb.set_state(OrbState.IDLE.value)
+                        self._orb_is_hidden = False
+                    else:
+                        self.orb.set_state(OrbState.HIDDEN.value)
+                        self._orb_is_hidden = True
+                asyncio.run_coroutine_threadsafe(
+                    self.tts.speak_streaming(f"Wake word {status}"), self._loop
+                )
 
             keyboard.add_hotkey("ctrl + space", on_hotkey, suppress=True)
             keyboard.add_hotkey("caps lock", on_hotkey, suppress=True)
             keyboard.add_hotkey("windows + s", on_hotkey, suppress=True)
-            
-            # UI Control Hotkeys
+
+            wake_word_hotkey = "alt + w"
+            try:
+                keyboard.add_hotkey(wake_word_hotkey, toggle_wake_word)
+            except Exception as e:
+                logger.warning(
+                    "Failed to register wake word toggle hotkey '%s': %s",
+                    wake_word_hotkey,
+                    e,
+                )
+
             def toggle_history():
                 logger.info("   ⌨️ Hotkey: Toggle History")
-                # Need a way to send 'toggle' to orb process
-                # For now, just a placeholder or we extend the queue
-                pass
-            
+
             keyboard.add_hotkey("windows + h", toggle_history)
-            
+
             self._keyboard_available = True
-            logger.info("   ⌨️ Keyboard listener started (Ctrl+Space, CapsLock, Win+S, Win+H)")
+            logger.info(
+                "   ⌨️ Keyboard listener started (Ctrl+Space, CapsLock, Win+S, Alt+W, Win+H)"
+            )
         except ImportError:
             logger.warning("   ⌨️ keyboard package not installed. Hotkeys disabled.")
         except Exception as e:
             logger.warning(f"   ⌨️ Keyboard listener failed: {e}")
 
     def initialize(self) -> None:
-        """Initialize all components (Async/Background where possible)"""
         logger.info("📦 Initializing system (Background Preloading Enabled)...")
 
         def run_loop():
@@ -158,90 +281,77 @@ class VoiceAssistant:
         self._loop_thread = threading.Thread(target=run_loop, daemon=True)
         self._loop_thread.start()
 
-        # 1. Start audio immediately (lightweight)
-        self.audio.start_stream()
+        init_audio_system(self.audio, self._wake_word_enabled, self.bus)
 
-        # 2. Start background preloading for heavy components
-        def preload_heavy_components():
-            logger.info("   🔄 Background: Starting sequential preloading...")
-            
-            # 1. STT (High Priority)
-            try:
-                logger.info("   🔄 Loading STT (1/3)...")
-                self.stt.load_models()
-                logger.info("   ✅ STT ready")
-            except Exception as e:
-                logger.error(f"   ❌ STT load failed: {e}")
+        if self._low_memory_mode:
+            logger.info(
+                "   Low-memory mode enabled: wake-word stays active, STT is loaded after wake and unloaded on idle"
+            )
 
-            # 2. Wake Word (Wait for STT to finish)
-            try:
-                from assistant.wake_word import WakeWordDetector
-                self.wake_detector = WakeWordDetector()
-                
-                logger.info("   🔄 Loading Wake Word (2/3)...")
-                self.wake_detector.load_model()
-                logger.info("   ✅ Wake Word ready")
-            except Exception as e:
-                logger.error(f"   ❌ Wake Word load failed: {e}")
+        self.task_executor, self.wake_detector = preload_components(
+            self.stt,
+            self.llm,
+            self.skill_router,
+            self.bus,
+            self._low_memory_mode,
+        )
 
-            # 3. Skills (Wait for Wake Word)
-            try:
-                logger.info("   🔄 Loading Skills (3/3)...")
-                self.skill_router.load_skills()
-                logger.info("   ✅ Skills ready")
-            except Exception as e:
-                logger.error(f"   ❌ Skills load failed: {e}")
-            
-            logger.info("   🏁 Background: Preloading sequence finished")
+        self.proactive_engine = init_proactive_engine()
 
-        threading.Thread(target=preload_heavy_components, daemon=True).start()
-        
-        # 3. Load Proactive Engine (Internal logic, usually fast)
-        try:
-            from assistant.proactive_engine import ProactiveEngine
-            self.proactive_engine = ProactiveEngine()
-        except ImportError:
-            logger.warning("⚠️ Proactive Engine could not be loaded")
-        except Exception as e:
-            logger.warning(f"⚠️ Proactive Error: {e}")
-
+        self.monitor = get_monitor()
         logger.info("🚀 Buddy core initialized!")
         self.monitor.start()
+        self.bus.publish(
+            SubsystemStateEvent(
+                subsystem="llm", state="healthy", detail="router initialized"
+            )
+        )
+        self.bus.publish(
+            SubsystemStateEvent(
+                subsystem="memory", state="healthy", detail="memory systems ready"
+            )
+        )
+        self.bus.publish(
+            SubsystemStateEvent(
+                subsystem="scheduler", state="healthy", detail="scheduler available"
+            )
+        )
 
         self._start_keyboard_listener()
 
     def _transition(self, new_state: AssistantState) -> None:
-        """Transition state and notify via events and UI callback"""
         if self.state != new_state:
             old_state_name = self.state.name
             new_state_name = new_state.name
-            
+
             logger.debug(f"[{old_state_name}] → [{new_state_name}]")
-            
-            # Emit Event
-            self.bus.publish(StateChangeEvent(
-                old_state=old_state_name,
-                new_state=new_state_name
-            ))
-            
+
+            self.bus.publish(
+                StateChangeEvent(old_state=old_state_name, new_state=new_state_name)
+            )
+
             self.state = new_state
             self._last_activity = time.time()
-            
+
+            if self._low_memory_mode:
+                if new_state == AssistantState.IDLE:
+                    self._schedule_stt_unload()
+                else:
+                    self._cancel_stt_unload()
+
             if self.ui_callback:
                 self.ui_callback(new_state_name)
 
     def trigger_wake(self) -> None:
-        """External wake trigger (e.g. from Tray)"""
         self._wake_triggered = True
 
     async def run(self) -> None:
-        """Watchdog wrapper for main loop"""
         self._running = True
         crash_count = 0
         last_crash_time = 0
-        
+
         logger.info("🛡️ Watchdog active")
-        
+
         while self._running:
             try:
                 await self._run_loop()
@@ -249,111 +359,197 @@ class VoiceAssistant:
                 break
             except Exception as e:
                 current_time = time.time()
-                # Reset counter if last crash was > 60s ago
                 if current_time - last_crash_time > 60:
                     crash_count = 0
-                
+
                 crash_count += 1
                 last_crash_time = current_time
-                
+
                 logger.critical(f"🔥 Critical Failure ({crash_count}/3): {e}")
-                
-                # Emit Error Event
+
                 from assistant.events import ErrorEvent
+
                 self.bus.publish(ErrorEvent(error=e, component="VoiceAssistant"))
-                
+
                 if crash_count >= 3:
                     logger.critical("❌ Too many crashes. Aborting.")
                     self._running = False
                     break
-                
+
                 logger.info("🔄 Restarting in 2 seconds...")
                 await asyncio.sleep(2)
-        
+
         self.shutdown()
 
+    def _enter_listening(self):
+        self._ensure_mic_active()
+        self._warm_stt_async()
+        self._idle_since = time.time()
+        self._followup_count = 0
+        self._orb_is_hidden = False
+        if self.orb:
+            self.orb.set_state(OrbState.IDLE.value)
+        self._transition(AssistantState.LISTENING)
+
+    def _enter_idle(self):
+        self._followup_count = 0
+        self._idle_since = time.time()
+        self._transition(AssistantState.IDLE)
+
     async def _run_loop(self) -> None:
-        """Main event loop logic with self-healing"""
         self.state = AssistantState.IDLE
         self._last_activity = time.time()
+        self._idle_since = time.time()
         self._transition(AssistantState.IDLE)
-        
+
         last_health_check = time.time()
-        
+
         while self._running:
             try:
                 self.monitor.heartbeat()
-                
-                # Periodic health check (every 30s)
+
                 if time.time() - last_health_check > 30:
                     self._perform_self_healing()
                     last_health_check = time.time()
 
                 await self._process_state()
-                await asyncio.sleep(0.01) # Yield control
+                await asyncio.sleep(0.01)
             except Exception as e:
                 logger.error(f"⚠️ Loop Error: {e}")
                 self.monitor.log_crash(e)
                 raise e
 
     def _perform_self_healing(self) -> None:
-        """Check component health and restart if necessary"""
-        # 1. Check Audio Stream
-        if not self.audio.is_recording and self.state != AssistantState.IDLE:
-             logger.warning("🩹 Healing: Audio recording stopped unexpectedly. Restarting...")
-             self.audio.start_stream()
-        
-        # 2. Check Wake Word Detector
-        if self.wake_detector and not self.wake_detector._is_loaded:
-             logger.warning("🩹 Healing: Wake Word Detector not loaded. Retrying background load...")
-             threading.Thread(target=self.wake_detector.load_model, daemon=True).start()
+        if self._wake_word_enabled and not self.audio.is_recording:
+            logger.warning("🩹 Healing: Audio not recording. Restarting stream...")
+            try:
+                self._ensure_mic_active()
+                self.bus.publish(
+                    SubsystemStateEvent(
+                        subsystem="mic",
+                        state="healthy",
+                        detail="audio stream restarted",
+                    )
+                )
+            except Exception as e:
+                logger.critical(
+                    f"❌ Audio restart failed: {e}. Check microphone connection."
+                )
+                self.bus.publish(
+                    SubsystemStateEvent(subsystem="mic", state="down", detail=str(e))
+                )
 
-        # 3. Check loop thread
+        if self.wake_detector and not getattr(self.wake_detector, "_is_loaded", False):
+            logger.warning(
+                "🩹 Healing: Wake Word Detector not loaded. Retrying background load..."
+            )
+            self.bus.publish(
+                SubsystemStateEvent(
+                    subsystem="wake_word", state="degraded", detail="detector reloading"
+                )
+            )
+            threading.Thread(target=self.wake_detector.load_model, daemon=True).start()
+
+        if self.llm and hasattr(self.llm, "_last_provider"):
+            if getattr(self.llm, "_all_providers_failed", False):
+                logger.warning(
+                    "⚠️ All LLM providers unavailable. Check API keys in .env or ensure Ollama is running."
+                )
+                self.bus.publish(
+                    SubsystemStateEvent(
+                        subsystem="llm",
+                        state="down",
+                        detail="all providers unavailable",
+                    )
+                )
+            else:
+                self.bus.publish(
+                    SubsystemStateEvent(
+                        subsystem="llm", state="healthy", detail="provider available"
+                    )
+                )
+
         if self._loop_thread and not self._loop_thread.is_alive():
-             logger.critical("🩹 Critical: Async loop thread died! Attempting restart...")
-             # Complex restart logic would go here
-             pass
+            logger.critical("🩹 Critical: Async loop thread died!")
 
     async def _process_state(self) -> None:
         if self.state == AssistantState.IDLE:
-            chunk = self.audio.get_audio_chunk()
-            if chunk and self.wake_detector:
-                # Wake detection is CPU heavy.
-                detected = self.wake_detector.process_audio(chunk)
-                if detected or self._wake_triggered:
-                    self._wake_triggered = False
-                    self._transition(AssistantState.LISTENING)
-                else:
-                    # check proactive triggers
-                    if self.proactive_engine:
-                        suggestion = self.proactive_engine.check_triggers(self._last_activity or time.time())
-                        if suggestion:
-                            logger.info(f"💡 Proactive Suggestion: {suggestion}")
-                            self._play_ding()
-                            self._transition(AssistantState.SPEAKING)
-                            self.tts.stop() 
-                            await self.tts.speak_streaming(suggestion)
-                            self._transition(AssistantState.IDLE)
+            if self._wake_triggered:
+                self._wake_triggered = False
+                logger.info("   🎙️ Wake triggered — entering LISTENING mode")
+                self._play_ding()
+                self._enter_listening()
+                return
+
+            idle_elapsed = time.time() - self._idle_since
+            if (
+                idle_elapsed > self._idle_hide_after
+                and self.orb
+                and not self._orb_is_hidden
+            ):
+                self.orb.set_state(OrbState.HIDDEN.value)
+                self._orb_is_hidden = True
+                logger.debug("   👁️ Orb hidden after idle timeout")
+
+            if (
+                not self._wake_word_enabled
+                and self._mic_idle_release_after > 0
+                and idle_elapsed > self._mic_idle_release_after
+            ):
+                self._release_microphone()
+
+            while self._wake_word_enabled and self.audio.is_recording:
+                chunk = self.audio.get_audio_chunk(timeout=0)
+                if not chunk:
+                    break
+                if self.wake_detector:
+                    detected = self.wake_detector.process_audio(chunk)
+                    if detected:
+                        self._play_ding()
+                        self._enter_listening()
+                        return
+                break
+
+            if self.proactive_engine:
+                suggestion = self.proactive_engine.check_triggers(
+                    self._last_activity or time.time()
+                )
+                if suggestion:
+                    logger.info(f"💡 Proactive Suggestion: {suggestion}")
+                    self._play_ding()
+                    self._transition(AssistantState.SPEAKING)
+                    self.tts.stop()
+                    await self.tts.speak_streaming(suggestion)
+                    self._enter_idle()
 
         elif self.state == AssistantState.LISTENING:
-            # listen_with_vad IS blocking and takes time (up to 15s).
-            # This MUST run in executor to avoid blocking the loop for others (like tray/hotkeys if shared loop?)
-            # But here the loop IS this logic.
-            # If we want hotkeys to interrupt, we need listen_with_vad to be interruptible or threaded.
-            # For this refactor, we accept it blocks the loop state, but we should make it awaitable if possible.
-            # Existing stt.listen_with_vad is likely synchronous.
-            # We wrap it in to_thread for safety.
-            
-            audio_bytes = await asyncio.to_thread(self.stt.listen_with_vad, self.audio, 15.0)
-            
+
+            def on_audio_level(level: float):
+                if self.orb:
+                    self.orb.set_audio_level(level)
+
+            if self._low_memory_mode and hasattr(self.stt, "reload_if_needed"):
+                await asyncio.to_thread(self.stt.reload_if_needed)
+
+            audio_bytes = await asyncio.to_thread(
+                self.stt.listen_with_vad,
+                self.audio,
+                15.0,
+                audio_level_callback=on_audio_level,
+            )
+
+            if self.orb:
+                self.orb.set_audio_level(0.0)
+
             if audio_bytes:
                 self._transition(AssistantState.PROCESSING)
+                self._idle_since = time.time()
                 await self._process_speech(audio_bytes)
             else:
-                self._transition(AssistantState.IDLE)
+                self._enter_idle()
 
         elif self.state == AssistantState.PROCESSING:
-            pass 
+            pass
 
         elif self.state == AssistantState.SPEAKING:
             if time.time() - self._last_activity > self._ambient_timeout:
@@ -368,25 +564,94 @@ class VoiceAssistant:
         text, confidence = self.stt.transcribe(audio_bytes)
         logger.info(f"🗣️ User: {text} ({confidence:.2f})")
 
-        if not text or confidence < 0.4:
-            self._transition(AssistantState.IDLE)
+        if not text or confidence < MIN_COMMAND_CONFIDENCE:
+            logger.info(
+                "   🎤 Ignoring low-confidence transcript (%.2f < %.2f)",
+                confidence,
+                MIN_COMMAND_CONFIDENCE,
+            )
+            self._enter_idle()
             return
 
-        # Emit Transcription Event
-        self.bus.publish(TranscriptionEvent(text=text, confidence=confidence))
+        final_text, should_continue = await self._handle_user_text(
+            text,
+            confidence=confidence,
+            source="voice",
+        )
 
-        text = self._apply_aliases(text)
+        self._transition(AssistantState.SPEAKING)
+        if not self._wake_word_enabled:
+            self._release_microphone()
 
-        # UI Update for processing text? Not supported by Orb directly (just state)
-        
-        response_text = await self.skill_router.route(text, {"confidence": confidence})
+        was_interrupted = threading.Event()
+        interrupt_event = threading.Event()
+        listener_thread = None
+
+        if self._wake_word_enabled and self.wake_detector:
+
+            def interrupt_listener():
+                self._ensure_mic_active()
+                while not interrupt_event.is_set():
+                    chunk = self.audio.get_audio_chunk(timeout=0.1)
+                    if chunk and self.wake_detector:
+                        if self.wake_detector.process_audio(chunk):
+                            logger.info("   ⚠️ User interrupted speech with Wake Word!")
+                            self._play_ding()
+                            self.tts.stop()
+                            was_interrupted.set()
+                            break
+
+            listener_thread = threading.Thread(target=interrupt_listener, daemon=True)
+            listener_thread.start()
+
+        try:
+            await self.tts.speak_streaming(final_text)
+        finally:
+            interrupt_event.set()
+            if listener_thread:
+                listener_thread.join(timeout=0.2)
+
+        if was_interrupted.is_set():
+            logger.info("👂 Listening for follow-up (wake word interrupt)...")
+            threading.Thread(target=self.stt.reload_if_needed, daemon=True).start()
+            self._enter_listening()
+        elif should_continue and self._followup_count < 1:
+            self._followup_count += 1
+            logger.info(f"👂 Listening for follow-up ({self._followup_count}/1)...")
+            threading.Thread(target=self.stt.reload_if_needed, daemon=True).start()
+
+            self._ensure_mic_active()
+            self._warm_stt_async()
+            self._idle_since = time.time()
+            self._orb_is_hidden = False
+            if self.orb:
+                self.orb.set_state(OrbState.IDLE.value)
+            self._transition(AssistantState.LISTENING)
+        else:
+            self._enter_idle()
+
+    async def _handle_user_text(
+        self, text: str, confidence: float = 1.0, source: str = "text"
+    ) -> tuple[str, bool]:
+        from assistant.skill_response import SkillResponse
+
+        user_text = text.strip()
+        if not user_text:
+            raise ValueError("Text input cannot be empty")
+
+        self.bus.publish(
+            TranscriptionEvent(text=user_text, confidence=confidence, source=source)
+        )
+        routed_text = self._apply_aliases(user_text)
+
+        response_text = await self.skill_router.route(
+            routed_text,
+            {"confidence": confidence, "source": source, "input_mode": "text"},
+        )
 
         if not response_text:
-            # Main LLM Fallback (Memory already handled by VoiceAssistant logging below? 
-            # Wait, LLMRouter uses history.
             recent_history = self.memory.get_recent(10)
-            # chat is now async
-            response_text = await self.llm.chat(text, recent_history)
+            response_text = await self.llm.chat(routed_text, recent_history)
 
         should_continue = False
         final_text = str(response_text)
@@ -400,19 +665,54 @@ class VoiceAssistant:
         if not should_continue:
             should_continue = self._should_continue_listening(final_text)
 
-        # Emit Response Event
-        self.bus.publish(ResponseEvent(text=final_text, is_skill=is_skill))
+        self.bus.publish(
+            ResponseEvent(text=final_text, is_skill=is_skill, source=source)
+        )
+        self.memory.add_exchange(user_text, final_text)
+        return final_text, should_continue
 
-        self.memory.add_exchange(text, final_text)
+    async def process_text_chat(
+        self, text: str, speak: bool = False, source: str = "dashboard"
+    ) -> str:
+        user_text = text.strip()
+        if not user_text:
+            raise ValueError("Text input cannot be empty")
 
-        self._transition(AssistantState.SPEAKING)
-        await self.tts.speak_streaming(final_text)
+        logger.info("💬 User (%s): %s", source, user_text)
+        self._idle_since = time.time()
+        self._orb_is_hidden = False
+        self._transition(AssistantState.PROCESSING)
 
-        if should_continue:
-            logger.info("👂 Listening for follow-up...")
-            self._transition(AssistantState.LISTENING)
+        final_text, _ = await self._handle_user_text(
+            user_text, confidence=1.0, source=source
+        )
+
+        if speak:
+            self._transition(AssistantState.SPEAKING)
+            try:
+                await self.tts.speak_streaming(final_text)
+            finally:
+                self._enter_idle()
         else:
-            self._transition(AssistantState.IDLE)
+            self._enter_idle()
+
+        return final_text
+
+    def submit_text_chat(
+        self,
+        text: str,
+        timeout: float = 60.0,
+        speak: bool = False,
+        source: str = "dashboard",
+    ) -> str:
+        if not self._loop or not self._loop.is_running():
+            raise RuntimeError("Assistant loop is not running")
+
+        future = asyncio.run_coroutine_threadsafe(
+            self.process_text_chat(text, speak=speak, source=source),
+            self._loop,
+        )
+        return future.result(timeout=timeout)
 
     def _should_continue_listening(self, text: str) -> bool:
         if text.endswith("?"):
@@ -420,7 +720,6 @@ class VoiceAssistant:
         return any(p in text.lower() for p in self.FOLLOWUP_PHRASES)
 
     def clear_memory(self) -> None:
-        """Clear conversation memory"""
         self.memory.clear()
         self.long_term_memory.clear()
         logger.info("🗑️ Conversation and Long-Term memory cleared")
@@ -428,6 +727,32 @@ class VoiceAssistant:
     def shutdown(self) -> None:
         logger.info("🛑 Shutting down...")
         self._running = False
+
+        try:
+            from skills.mcp_skill import MCPSkill
+
+            if callable(getattr(MCPSkill, "cleanup_all", None)):
+                if asyncio.iscoroutinefunction(MCPSkill.cleanup_all):
+                    if self._loop and self._loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            MCPSkill.cleanup_all(), self._loop
+                        ).result(timeout=3)
+                    else:
+                        asyncio.run(MCPSkill.cleanup_all())
+                else:
+                    MCPSkill.cleanup_all()
+            logger.info("🔌 MCP Subprocesses stopped")
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.warning(f"Failed to cleanup MCPSkill: {e}")
+
+        self._cancel_stt_unload()
+        if hasattr(self.stt, "unload_models"):
+            try:
+                self.stt.unload_models()
+            except Exception:
+                pass
         if hasattr(self, "audio"):
             self.audio.stop_recording()
             self.audio.stop_stream()
@@ -436,54 +761,91 @@ class VoiceAssistant:
 
 
 def main():
-    """Desktop App Entry Point (PyQt6 + Pystray)"""
+    args = parse_args()
     setup_logger()
 
-    # 0. Register Dependencies in Container
-    container.register(IAudioManager, AudioManager)
-    container.register(ISTTProvider, SpeechToText)
-    container.register(ITTSProvider, TextToSpeech)
-    
-    # Initialize Memory
+    from assistant.conversation_memory import ConversationMemory
+    from assistant.long_term_memory import LongTermMemory
+
+    deps = setup_dependencies()
     memory = ConversationMemory()
     ltm = LongTermMemory()
-    
-    # Special handling for LLM which needs memory systems
-    llm = LLMRouter(conversation_memory=memory, long_term_memory=ltm)
-    container.register(ILLMProvider, llm)
-    
-    # Register SkillRouter with injected dependencies
-    skill_router = SkillRouter(llm_router=llm, tts=container.resolve(ITTSProvider))
-    container.register(SkillRouter, skill_router)
 
-    # 1. Initialize Orb Overlay (Separate Process)
     orb = OrbOverlay()
     orb.start()
-    orb.set_state(OrbState.IDLE.value) # Show immediately
+    orb.set_state(OrbState.HIDDEN.value)
 
-    # 2. Initialize Assistant via DI
+    start_dashboard(args.dashboard_host, args.dashboard_port)
+
     assistant = VoiceAssistant(
-        audio=container.resolve(IAudioManager),
-        stt=container.resolve(ISTTProvider),
-        tts=container.resolve(ITTSProvider),
-        llm=container.resolve(ILLMProvider),
-        skill_router=container.resolve(SkillRouter),
-        event_bus=container.resolve(EventBus)
+        audio=deps["audio"],
+        stt=deps["stt"],
+        tts=deps["tts"],
+        llm=deps["llm"],
+        skill_router=deps["skill_router"],
+        event_bus=deps["event_bus"],
+    )
+    assistant.memory = memory
+    assistant.long_term_memory = ltm
+
+    event_bus = deps["event_bus"]
+
+    def _toggle_mic(assistant, orb):
+        def _inner():
+            assistant._wake_word_enabled = not assistant._wake_word_enabled
+            status = "ON" if assistant._wake_word_enabled else "OFF"
+            if assistant._wake_word_enabled:
+                assistant._ensure_mic_active()
+                orb.set_state("idle")
+            else:
+                assistant._release_microphone()
+                orb.set_state("hidden")
+
+        return _inner
+
+    def _on_tool_confirmed(event_bus):
+        def _inner(tool_name: str, outcome: str):
+            event_bus.publish(
+                ConfirmationEvent(tool_name=tool_name, action=outcome, dry_run="")
+            )
+
+        return _inner
+
+    try:
+        dashboard_bridge = DashboardBridge(event_bus)
+        import dashboard.app as _dash_app
+
+        _dash_app.init(
+            dashboard_bridge,
+            wake_cb=lambda: assistant.trigger_wake() or orb.set_state("listening"),
+            clear_memory_cb=assistant.clear_memory,
+            toggle_mic_cb=_toggle_mic(assistant, orb),
+            confirm_cb=_on_tool_confirmed(event_bus),
+            chat_cb=lambda message, speak=False: assistant.submit_text_chat(
+                message, speak=speak, source="dashboard"
+            ),
+        )
+    except Exception as e:
+        logger.warning(f"   ⚠️ Dashboard bridge failed: {e}")
+        dashboard_bridge = None
+
+    event_bus.subscribe(StateChangeEvent, lambda e: update_ui(e.new_state))
+    event_bus.subscribe(
+        TranscriptionEvent, lambda e: orb.add_message(e.text, is_user=True)
+    )
+    event_bus.subscribe(ResponseEvent, lambda e: orb.add_message(e.text, is_user=False))
+    event_bus.subscribe(
+        StatusEvent, lambda e: orb.add_message(f"⚙️ {e.text}", is_user=False)
     )
 
-    # 3. Connect UI to Event Bus
-    event_bus = container.resolve(EventBus)
-    event_bus.subscribe(StateChangeEvent, lambda e: update_ui(e.new_state))
-    event_bus.subscribe(TranscriptionEvent, lambda e: orb.add_message(e.text, is_user=True))
-    event_bus.subscribe(ResponseEvent, lambda e: orb.add_message(e.text, is_user=False))
+    llm = deps["llm"]
+    llm.register_status_callback(lambda txt: event_bus.publish(StatusEvent(text=txt)))
 
-    # Callback to update Orb
     def update_ui(state_name: str) -> None:
-        # Map AssistantState names to OrbState values (all lowercase)
-        # IDLE -> "idle", LISTENING -> "listening", etc.
         orb.set_state(state_name.lower())
 
     assistant.set_ui_callback(update_ui)
+    assistant.orb = orb
 
     try:
         assistant.initialize()
@@ -492,37 +854,35 @@ def main():
         orb.stop()
         return
 
-    # 3. Define Tray Callbacks
     def on_show():
         assistant.trigger_wake()
-        orb.set_state("listening") # Feedback
+        orb.set_state("listening")
 
     def on_exit():
         assistant.shutdown()
         orb.stop()
         tray.stop()
-        os._exit(0) # Force exit threads
+        os._exit(0)
 
-    # 4. Start Assistant Thread (Async Loop)
     def run_assistant():
         asyncio.run(assistant.run())
 
     assistant_thread = threading.Thread(target=run_assistant, daemon=True)
     assistant_thread.start()
 
-    # 5. Run Tray (Blocking Main Thread) - Critical for stability
     tray = SystemTrayApp(on_exit=on_exit, on_show=on_show)
-    
+
     logger.info("🚀 Buddy Desktop App Running (Orb Mode)!")
     logger.info("   Check System Tray. Press Ctrl+Space to talk.")
-    
+
     try:
-        tray.run() # This BLOCKS until tray.stop() is called
+        tray.run()
     except KeyboardInterrupt:
         on_exit()
     except Exception as e:
         logger.critical(f"Tray crashed: {e}")
         on_exit()
+
 
 if __name__ == "__main__":
     main()
