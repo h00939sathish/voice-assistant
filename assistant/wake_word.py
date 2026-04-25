@@ -13,16 +13,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
     WAKE_WORD_MODEL, WAKE_WORD_THRESHOLD,
     PICOVOICE_ACCESS_KEY, PORCUPINE_KEYWORD_PATH,
-    OWW_INFERENCE_FRAMEWORK
+    OWW_INFERENCE_FRAMEWORK,
+    WAKE_WORD_CUSTOM
 )
 
 class WakeWordDetector:
     """Detects wake word using openWakeWord (Primary) or Vosk (Fallback)"""
     
+    # Fallback wake words (simpler, less reliable)
+    FALLBACK_KEYWORDS = ["hey jarvis", "hey buddy", "okay buddy", "hey assistant"]
+    
     def __init__(self, on_wake: Optional[Callable] = None):
         self.threshold = WAKE_WORD_THRESHOLD
         self.consecutive_hits = int(os.getenv("WAKE_WORD_CONSECUTIVE_HITS", "2"))
         self.cooldown_ms = int(os.getenv("WAKE_WORD_COOLDOWN_MS", "2000"))
+        self.custom_wake_word = (os.getenv("WAKE_WORD_CUSTOM") or "").strip().lower()
         self.on_wake = on_wake
         self.oww_model = None
         self.vosk_rec = None

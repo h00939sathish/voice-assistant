@@ -27,6 +27,8 @@ WAKE_WORD_MODEL = "hey_jarvis"  # Built-in openWakeWord model
 WAKE_WORD_THRESHOLD = float(os.getenv("WAKE_WORD_THRESHOLD", "0.5"))  # Higher threshold = fewer false positives (0.3-0.7 range)
 WAKE_WORD_CONSECUTIVE_HITS = int(os.getenv("WAKE_WORD_CONSECUTIVE_HITS", "2"))  # Require N consecutive detections
 WAKE_WORD_COOLDOWN_MS = int(os.getenv("WAKE_WORD_COOLDOWN_MS", "2000"))  # Cooldown between detections (ms)
+# Custom wake word (requires training - advanced feature)
+WAKE_WORD_CUSTOM = os.getenv("WAKE_WORD_CUSTOM", "")  # Custom wake word (e.g., "hey buddy")
 # "tflite" uses ~100MB less RAM than "onnx"; fall back to "onnx" if tflite not available
 OWW_INFERENCE_FRAMEWORK = os.getenv("OWW_INFERENCE_FRAMEWORK", "tflite")
 
@@ -98,8 +100,8 @@ TTS_VOICE = os.getenv("TTS_VOICE", "en-US-AriaNeural")
 TTS_RATE = "+0%"
 TTS_PITCH = "+0Hz"
 
-# MCP Server Configuration
-# Keys are the names you use to address them (e.g. "ask desktop commander")
+# MCP Server Configuration - Keep only essential servers
+# Unused: http, workflow, google, browser (covered by browser_skill)
 MCP_SERVERS = {
     "desktop_commander": {
         "command": "node", 
@@ -117,26 +119,34 @@ MCP_SERVERS = {
         "command": "python3",
         "args": ["mcp-tools/memory-mcp/server.py"]
     },
-    "workflow": {
-        "command": "python3",
-        "args": ["mcp-tools/workflow-mcp/server.py"]
-    },
-    "browser": {
-        "command": "python3",
-        "args": ["mcp-tools/browser-mcp/server.py"]
-    },
-    "http": {
-        "command": "python3",
-        "args": ["mcp-tools/http-mcp/server.py"]
-    },
-    "google": {
-        "command": "python3",
-        "args": ["mcp-tools/google-mcp/server.py"]
-    }
+    # DISABLED (not essential or covered by skills):
+    # "workflow": {...},   # Rarely used
+    # "browser": {...},   # Covered by browser_skill
+    # "http": {...},    # Not used
+    # "google": {...},  # Covered by browser
 }
 
 # Assistant personality
 ASSISTANT_NAME = "Buddy"
+
+# Core Skills (active skills - keep small for maintainability)
+CORE_SKILLS = [
+    "time",      # Time queries
+    "weather",   # Weather info
+    "calendar", # Calendar events
+    "reminder", # Reminders
+    "browser",  # Web browsing/automation
+    "system",  # System control
+    "memory",   # Memory management
+]
+
+# Archived skills (loaded but disabled)
+ARCHIVED_SKILLS = [
+    "waifu",        # Visual avatar - fun feature
+    "feedback",     # Not implemented
+    "registry",    # Fragile Windows ops
+    "news",        # Rarely used
+]
 
 # Interaction / Presence behavior
 # Default to push-to-talk style startup to avoid permanently holding the mic.
@@ -163,6 +173,11 @@ PROACTIVE_SETTINGS = {
     "IDLE_THRESHOLD": 3600,  # 1 hour in seconds
     "MORNING_HOUR": 8,  # Morning greeting start hour
     "NIGHT_HOUR": 22,   # Night mode suggestion hour
+    # Additional proactive features
+    "LOW_MEMORY_WARNING_MB": 512,  # Warn if available RAM < 512MB
+    "IDLE_GREETING": True,  # Greet after idle period
+    "CONTEXT_AWARENESS": True,  # Remember recent topics
+    "HELPFUL_SUGGESTIONS": True,  # Offer helpful suggestions
 }
 
 # Desktop Awareness Settings
