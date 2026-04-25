@@ -101,7 +101,7 @@ TTS_RATE = "+0%"
 TTS_PITCH = "+0Hz"
 TTS_USE_OFFLINE = os.getenv("TTS_USE_OFFLINE", "true").lower() == "true"
 TTS_OFFLINE_VOICE = os.getenv("TTS_OFFLINE_VOICE", "en_GB-alan-medium")
-PIPER_VOICE_PATH = os.getenv("PIPER_VOICE_PATH", "")  # Path to .onnx model file
+PIPER_VOICE_PATH = os.getenv("PIPER_VOICE_PATH", str(BASE_DIR / "data" / "models" / "piper" / "alan" / "medium" / "en_GB-alan-medium.onnx"))  # Path to .onnx model file
 
 # MCP Server Configuration - Keep only essential servers
 # Unused: http, workflow, google, browser (covered by browser_skill)
