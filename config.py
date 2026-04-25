@@ -20,11 +20,15 @@ SOUNDS_DIR = ASSETS_DIR / "sounds"
 # Audio settings
 SAMPLE_RATE = 16000
 CHANNELS = 1
-CHUNK_SIZE = 512  # ~32ms at 16kHz
+CHUNK_SIZE = 1280  # openWakeWord strictly expects 1280 chunks or multiples
 
 # Wake word settings
 WAKE_WORD_MODEL = "hey_jarvis"  # Built-in openWakeWord model
-WAKE_WORD_THRESHOLD = float(os.getenv("WAKE_WORD_THRESHOLD", "0.4"))
+WAKE_WORD_THRESHOLD = float(os.getenv("WAKE_WORD_THRESHOLD", "0.5"))  # Higher threshold = fewer false positives (0.3-0.7 range)
+WAKE_WORD_CONSECUTIVE_HITS = int(os.getenv("WAKE_WORD_CONSECUTIVE_HITS", "2"))  # Require N consecutive detections
+WAKE_WORD_COOLDOWN_MS = int(os.getenv("WAKE_WORD_COOLDOWN_MS", "2000"))  # Cooldown between detections (ms)
+# "tflite" uses ~100MB less RAM than "onnx"; fall back to "onnx" if tflite not available
+OWW_INFERENCE_FRAMEWORK = os.getenv("OWW_INFERENCE_FRAMEWORK", "tflite")
 
 # Porcupine settings
 PICOVOICE_ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY", "")
@@ -32,30 +36,48 @@ PICOVOICE_ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY", "")
 PORCUPINE_KEYWORD_PATH = BASE_DIR / "HEY-JARVIS_en_windows_v4_0_0" / "HEY-JARVIS_en_windows_v4_0_0.ppn"
 
 # STT settings (faster-whisper)
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
+# Use "tiny" to save ~300MB RAM vs "base". Accuracy is nearly identical for short commands.
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "tiny")
 try:
     import torch
     WHISPER_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 except ImportError:
     WHISPER_DEVICE = "cpu"
-    
+
 WHISPER_COMPUTE_TYPE = "float16" if WHISPER_DEVICE == "cuda" else "int8"
 
 # VAD settings (Silero)
-VAD_THRESHOLD = 0.5
-SILENCE_DURATION_MS = 700  # Stop listening after 700ms of silence
-MIN_SPEECH_DURATION_MS = 250  # Minimum speech to accept
+VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.6"))  # Higher = less sensitive to background noise (0.3-0.9 range)
+VAD_MIN_SPEECH_MS = int(os.getenv("VAD_MIN_SPEECH_MS", "300"))  # Min speech duration to trigger (ms)
+SILENCE_DURATION_MS = int(os.getenv("SILENCE_DURATION_MS", "2000"))  # Stop listening after N ms of silence
+MIN_SPEECH_DURATION_MS = int(os.getenv("MIN_SPEECH_DURATION_MS", "250"))  # Minimum speech to accept
+MIN_COMMAND_CONFIDENCE = float(os.getenv("MIN_COMMAND_CONFIDENCE", "0.55"))
 
 # LLM settings
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+# Priority: local first (offline-capable) then cloud fallbacks
+_OLLAMA_MODELS_RAW = os.getenv(
+    "OLLAMA_MODELS",
+    os.getenv("OLLAMA_MODEL", "phi4-mini:latest,qwen3.5:4b-q4_K_M"),
+)
+OLLAMA_MODELS = [model.strip() for model in _OLLAMA_MODELS_RAW.split(",") if model.strip()]
+OLLAMA_MODEL = OLLAMA_MODELS[0] if OLLAMA_MODELS else "phi4-mini:latest"
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+
+# LLM priority mode: "local_first" = Ollama primary, cloud fallback | "cloud_first" = cloud primary | "online_only" = skip Ollama
+LLM_PRIORITY_MODE = os.getenv("LLM_PRIORITY_MODE", "local_first")
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "5m")  # Keep model loaded for responsiveness
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = "gemini-2.0-flash"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL = "google/gemini-2.0-flash-exp:free"  # Reliable free model via OpenRouter
+OPENROUTER_MODEL = "meta-llama/llama-3.1-8b-instruct:free"  # Reliably available free model
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 NVIDIA_MODEL = "meta/llama-3.1-70b-instruct" # Powerful model
+
+# Dynamic tool discovery keeps tool context small:
+# model sees only search_tools first, then gets a tiny relevant subset.
+DYNAMIC_TOOL_DISCOVERY_ENABLED = os.getenv("DYNAMIC_TOOL_DISCOVERY_ENABLED", "true").lower() in {"1", "true", "yes"}
+DYNAMIC_TOOL_DISCOVERY_TOP_K = int(os.getenv("DYNAMIC_TOOL_DISCOVERY_TOP_K", "8"))
 
 # LM Studio settings (local OpenAI-compatible API)
 LMSTUDIO_HOST = os.getenv("LMSTUDIO_HOST", "http://localhost:1234/v1")
@@ -69,7 +91,7 @@ NEWSAPI_API_KEY = os.getenv("NEWSAPI_API_KEY", "")
 # Spotify API (for background control)
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
-SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://localhost:8888/callback")
+SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback")
 
 # TTS settings
 TTS_VOICE = os.getenv("TTS_VOICE", "en-US-AriaNeural")
@@ -81,28 +103,57 @@ TTS_PITCH = "+0Hz"
 MCP_SERVERS = {
     "desktop_commander": {
         "command": "node", 
-        "args": ["mcp-tools/DesktopCommanderMCP/dist/index.js"]
+        "args": ["mcp-tools/DesktopCommanderMCP/dist/index.js", "--no-onboarding"]
     },
-    # "context7": { ... } # User needs to provide path
-    "github": {
-        "command": "uvx",
-        "args": ["mcp-server-github"],
-        "env": {
-            **os.environ,
-            "GITHUB_PERSONAL_ACCESS_TOKEN": os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN", ""),
-            "GITHUB_TOKEN": os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN", "") # Try both common names
-        }
+    "planner": {
+        "command": "python3",
+        "args": ["mcp-tools/planner-mcp/server.py"]
+    },
+    "router": {
+        "command": "python3",
+        "args": ["mcp-tools/router-mcp/server.py"]
+    },
+    "memory": {
+        "command": "python3",
+        "args": ["mcp-tools/memory-mcp/server.py"]
+    },
+    "workflow": {
+        "command": "python3",
+        "args": ["mcp-tools/workflow-mcp/server.py"]
+    },
+    "browser": {
+        "command": "python3",
+        "args": ["mcp-tools/browser-mcp/server.py"]
+    },
+    "http": {
+        "command": "python3",
+        "args": ["mcp-tools/http-mcp/server.py"]
+    },
+    "google": {
+        "command": "python3",
+        "args": ["mcp-tools/google-mcp/server.py"]
     }
 }
 
 # Assistant personality
 ASSISTANT_NAME = "Buddy"
 
+# Interaction / Presence behavior
+# Default to push-to-talk style startup to avoid permanently holding the mic.
+WAKE_WORD_STARTUP_ENABLED = os.getenv("WAKE_WORD_STARTUP_ENABLED", "false").lower() in {"1", "true", "yes"}
+ORB_IDLE_HIDE_AFTER = float(os.getenv("ORB_IDLE_HIDE_AFTER", "4.0"))
+MIC_IDLE_RELEASE_AFTER = float(os.getenv("MIC_IDLE_RELEASE_AFTER", "6.0"))
+LOW_MEMORY_MODE = os.getenv("LOW_MEMORY_MODE", "false").lower() in {"1", "true", "yes"}
+LOW_MEMORY_UNLOAD_DELAY_SEC = float(os.getenv("LOW_MEMORY_UNLOAD_DELAY_SEC", "2.0"))
+OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "0s" if LOW_MEMORY_MODE else "5m")
+
 # Long-term Memory Settings
 ENABLE_LONG_TERM_MEMORY = True
 MEMORY_DB_PATH = "data/memory.db"  # Path to long-term memory database
 MEMORY_MIN_CONFIDENCE = 0.7  # Minimum confidence for memory retrieval
 MEMORY_MAX_RESULTS = 5  # Maximum memories to include in context
+# Disable SentenceTransformers to save ~400MB RAM. Uses keyword search as fallback.
+ENABLE_EMBEDDINGS = os.getenv("ENABLE_EMBEDDINGS", "false").lower() in {"1", "true", "yes"}
 
 # Proactive Intelligence Settings
 PROACTIVE_SETTINGS = {
@@ -113,3 +164,13 @@ PROACTIVE_SETTINGS = {
     "MORNING_HOUR": 8,  # Morning greeting start hour
     "NIGHT_HOUR": 22,   # Night mode suggestion hour
 }
+
+# Desktop Awareness Settings
+DESKTOP_AWARENESS_ENABLED = os.getenv("DESKTOP_AWARENESS_ENABLED", "false").lower() in {"1", "true", "yes"}
+DESKTOP_AWARENESS_INTERVAL = float(os.getenv("DESKTOP_AWARENESS_INTERVAL", "10"))
+DESKTOP_AWARENESS_OCR = os.getenv("DESKTOP_AWARENESS_OCR", "true").lower() in {"1", "true", "yes"}
+DESKTOP_AWARENESS_HISTORY = int(os.getenv("DESKTOP_AWARENESS_HISTORY", "3"))
+
+# Authority Gating Settings
+AUTHORITY_GATE_ENABLED = os.getenv("AUTHORITY_GATE_ENABLED", "true").lower() in {"1", "true", "yes"}
+AUTHORITY_MIN_LEVEL = int(os.getenv("AUTHORITY_MIN_LEVEL", "3"))  # 1=LOW, 2=MEDIUM, 3=HIGH, 4=CRITICAL
