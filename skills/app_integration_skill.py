@@ -3,26 +3,34 @@ import asyncio
 import logging
 import re
 import time  # used only in thread-executed functions if needed
-from typing import Any, Dict, Optional
+from typing import Any
 
-from skills.base_skill import BaseSkill
-from assistant.app_controller import AppController
 from assistant.skill_response import SkillResponse
+from skills.base_skill import BaseSkill, skill
 
 logger = logging.getLogger("AI_Assistant.AppIntegrationSkill")
 
 
+@skill(
+    name="app_integration",
+    keywords=[
+        "open spotify", "open chrome", "open edge", "open brave", "open opera",
+        "open discord", "open whatsapp", "open notepad", "open vscode",
+        "play on spotify", "play spotify", "pause spotify", "next song", "skip song",
+        "previous song", "volume spotify",
+        "search chrome", "search edge", "search brave", "search opera",
+        "send discord", "message discord", "mute discord",
+        "send whatsapp", "message whatsapp",
+        "spotify", "chrome", "edge", "brave", "opera", "discord", "whatsapp",
+        "notepad", "vscode", "visual studio code",
+    ],
+    description="Open apps and control them: Spotify, Chrome, Edge, Brave, Discord, WhatsApp, Notepad, VS Code",
+    priority=10
+)
 class Skill(BaseSkill):
     """
     Skill for opening apps and executing commands within them.
     """
-
-    name = "app_integration"
-    keywords = [
-        "open", "spotify", "chrome", "edge", "brave", "opera", "discord", "whatsapp", "notepad", "vscode",
-        "play", "search", "send", "type", "save", "google", "browse", "look up", "find",
-        "message", "mute", "pause", "next", "skip", "previous", "back", "volume"
-    ]
 
     def __init__(self):
         super().__init__()
@@ -30,17 +38,18 @@ class Skill(BaseSkill):
         self._controller_loaded = False
         self.assistant = None
 
-    async def handle(self, text: str, context: Any) -> Optional[str]:
+    async def handle(self, text: str, context: Any) -> str | None:
         """
         Standard skill entry point.
         """
-        self.assistant = context.get('assistant')
-        # context = {'source': 'jarvis_core'} # Already in context
-        return await self.on_command(text, context)
+        if isinstance(context, dict):
+            self.assistant = context.get('assistant')
+        return await self.on_command(text, context if isinstance(context, dict) else {})
 
     def _get_controller(self):
         if not self._controller_loaded:
             try:
+                from assistant.app_controller import AppController
                 self.controller = AppController()
                 self._controller_loaded = True
             except Exception as e:
@@ -48,12 +57,12 @@ class Skill(BaseSkill):
                 return None
         return self.controller
 
-    async def on_command(self, text: str, context: Dict[str, Any]) -> str:
+    async def on_command(self, text: str, context: dict[str, Any]) -> str:
         """
         Parse command and route to specific app handler.
         """
         text = text.lower()
-        
+
         if "spotify" in text:
             return await self._handle_spotify_async(text)
         elif "edge" in text:
@@ -72,11 +81,13 @@ class Skill(BaseSkill):
             return await self._open_and_execute("notepad", "type " + text, context)
         elif "vscode" in text or "visual studio" in text:
             return await self._open_and_execute("vscode", "open", context)
-            
+        elif "epic" in text:
+            return await self._open_and_execute("epic", "open", context)
+
         return None
 
     # -------------------- Async helpers --------------------
-    async def _open_and_execute(self, app_name: str, action: str, context: Dict[str, Any]) -> str:
+    async def _open_and_execute(self, app_name: str, action: str, context: dict[str, Any]) -> str:
         """
         Open application (via assistant's open_app) and then execute action via controller.
         Both operations are executed in threads if blocking.
@@ -86,10 +97,18 @@ class Skill(BaseSkill):
             if not controller:
                 return "App controller unavailable."
 
-            # Launch app if needed
+            # Check if app is already running — if so, just focus it
+            is_running = await asyncio.to_thread(controller.is_app_running, app_name)
+            if is_running:
+                handle = await asyncio.to_thread(controller.find_window_by_title, app_name)
+                if handle:
+                    await asyncio.to_thread(controller.focus_window, handle)
+                    return f"{app_name.title()} is already open and now in focus."
+
+            # Launch app since it's not running
             await asyncio.to_thread(controller.launch_app, app_name)
             # allow app to initialize
-            await asyncio.sleep(1.8)
+            await asyncio.sleep(1.2)
 
             # controller already loaded above
 
@@ -140,7 +159,7 @@ class Skill(BaseSkill):
                     if m:
                         url = m.group(1).strip()
                         return controller.execute_command("chrome", "go_to", url=url)
-                
+
                 # YouTube Music Integration
                 if "youtube music" in action and "play" in action:
                     m = re.search(r"play\s+(.+?)\s+on\s+youtube\s+music", action)
@@ -148,7 +167,9 @@ class Skill(BaseSkill):
                         query = m.group(1).strip()
                         # Use controller to find URL
                         try:
-                            from assistant.youtube_music_controller import get_ytm_controller
+                            from assistant.youtube_music_controller import (
+                                get_ytm_controller,
+                            )
                             ytm = get_ytm_controller()
                             url = ytm.get_song_url(query)
                             if url:
@@ -156,7 +177,7 @@ class Skill(BaseSkill):
                             return f"Could not find '{query}' on YouTube Music"
                         except ImportError:
                             pass
-                            
+
                     # Fallback to generic search
                     return controller.execute_command("chrome", "go_to", url="https://music.youtube.com")
 
@@ -213,7 +234,7 @@ class Skill(BaseSkill):
                             controller.execute_command(
                                 "whatsapp", "search_contact", contact=contact
                             )
-                            time.sleep(0.8)
+                            time.sleep(0.5)
                         return controller.execute_command(
                             "whatsapp", "send_message", message=message
                         )
@@ -226,34 +247,44 @@ class Skill(BaseSkill):
     # -------------------- Async wrappers for direct handlers --------------------
     async def _handle_spotify_async(self, cmd: str) -> str:
         """Handle Spotify commands - uses API for background control, falls back to keyboard"""
-        # Try Spotify API first (background control - like Siri!)
+        # Try Spotify API first (all blocking I/O runs in thread)
         try:
-            from assistant.spotify_controller import get_spotify_controller
-            spotify_api = get_spotify_controller()
-            
-            if spotify_api.is_available:
-                return await asyncio.to_thread(lambda: self._handle_spotify_api(cmd, spotify_api))
+            def _try_api():
+                from assistant.spotify_controller import get_spotify_controller
+                spotify_api = get_spotify_controller()
+                if spotify_api.is_available:
+                    return self._handle_spotify_api(cmd, spotify_api)
+                return None  # Not configured, skip to keyboard
+
+            result = await asyncio.to_thread(_try_api)
+            if result is not None:
+                return result
         except ImportError:
             pass  # Fall through to keyboard control
+        except RuntimeError as e:
+            if "PREMIUM_REQUIRED" in str(e):
+                logger.info("Spotify Premium not available, switching to keyboard automation")
+            else:
+                logger.warning(f"Spotify API failed, falling back to keyboard: {e}")
         except Exception as e:
             logger.warning(f"Spotify API failed, falling back to keyboard: {e}")
-        
+
         # Fallback: keyboard automation (requires window focus)
         ctr = self._get_controller()
         if not ctr:
             return "App controller unavailable."
         if not await asyncio.to_thread(ctr.is_app_running, "spotify"):
             await asyncio.to_thread(ctr.launch_app, "spotify")
-            await asyncio.sleep(3.0)
+            await asyncio.sleep(2.5)
         return await asyncio.to_thread(lambda: self._handle_spotify_sync(cmd, ctr))
-    
+
     def _handle_spotify_api(self, cmd: str, spotify) -> str:
         """Handle Spotify via Web API (works in background!)"""
         cmd = cmd.lower()
-        
+
         if "open" in cmd and "spotify" in cmd and "play" not in cmd:
             return "Spotify API connected. What would you like to play?"
-        
+
         if "play" in cmd:
             # Extract song/artist name
             m = re.search(r"play\s+(?:music\s+)?(?:search\s+)?(?:for\s+)?(.+)", cmd, re.I)
@@ -264,16 +295,16 @@ class Skill(BaseSkill):
                 if query:
                     return spotify.search_and_play(query)
             return spotify.play()
-        
+
         if "pause" in cmd or "stop" in cmd:
             return spotify.pause()
-        
+
         if "next" in cmd or "skip" in cmd:
             return spotify.next_track()
-        
+
         if "previous" in cmd or "back" in cmd:
             return spotify.previous_track()
-        
+
         if "volume" in cmd:
             m = re.search(r"(\d+)", cmd)
             if m:
@@ -283,7 +314,7 @@ class Skill(BaseSkill):
                 return spotify.set_volume(80)
             if "down" in cmd or "quieter" in cmd:
                 return spotify.set_volume(30)
-        
+
         return "I couldn't interpret that Spotify command."
 
     def _handle_spotify_sync(self, cmd: str, controller) -> str:
@@ -326,7 +357,7 @@ class Skill(BaseSkill):
             return "App controller unavailable."
         if not await asyncio.to_thread(ctr.is_app_running, "chrome"):
             await asyncio.to_thread(ctr.launch_app, "chrome")
-            await asyncio.sleep(1.6)
+            await asyncio.sleep(1.2)
         return await asyncio.to_thread(lambda: self._handle_chrome_sync(cmd, ctr))
 
     def _handle_chrome_sync(self, cmd: str, controller) -> str:
@@ -361,7 +392,7 @@ class Skill(BaseSkill):
             return "App controller unavailable."
         if not await asyncio.to_thread(ctr.is_app_running, "msedge"):
             await asyncio.to_thread(ctr.launch_app, "edge")
-            await asyncio.sleep(1.6)
+            await asyncio.sleep(1.2)
         return await asyncio.to_thread(lambda: self._handle_edge_sync(cmd, ctr))
 
     def _handle_edge_sync(self, cmd: str, controller) -> str:
@@ -396,7 +427,7 @@ class Skill(BaseSkill):
             return "App controller unavailable."
         if not await asyncio.to_thread(ctr.is_app_running, "brave"):
             await asyncio.to_thread(ctr.launch_app, "brave")
-            await asyncio.sleep(1.6)
+            await asyncio.sleep(1.2)
         return await asyncio.to_thread(lambda: self._handle_brave_sync(cmd, ctr))
 
     def _handle_brave_sync(self, cmd: str, controller) -> str:
@@ -431,7 +462,7 @@ class Skill(BaseSkill):
             return "App controller unavailable."
         if not await asyncio.to_thread(ctr.is_app_running, "opera"):
             await asyncio.to_thread(ctr.launch_app, "opera")
-            await asyncio.sleep(1.6)
+            await asyncio.sleep(1.2)
         return await asyncio.to_thread(lambda: self._handle_opera_sync(cmd, ctr))
 
     def _handle_opera_sync(self, cmd: str, controller) -> str:
@@ -466,7 +497,7 @@ class Skill(BaseSkill):
             return "App controller unavailable."
         if not await asyncio.to_thread(ctr.is_app_running, "discord"):
             await asyncio.to_thread(ctr.launch_app, "discord")
-            await asyncio.sleep(1.6)
+            await asyncio.sleep(1.2)
         return await asyncio.to_thread(lambda: self._handle_discord_sync(cmd, ctr))
 
     def _handle_discord_sync(self, cmd: str, controller) -> str:
@@ -495,7 +526,7 @@ class Skill(BaseSkill):
             return "App controller unavailable."
         if not await asyncio.to_thread(ctr.is_app_running, "whatsapp"):
             await asyncio.to_thread(ctr.launch_app, "whatsapp")
-            await asyncio.sleep(2.4)
+            await asyncio.sleep(1.8)
         return await asyncio.to_thread(lambda: self._handle_whatsapp_sync(cmd, ctr))
 
     def _handle_whatsapp_sync(self, cmd: str, controller) -> str:
@@ -515,7 +546,7 @@ class Skill(BaseSkill):
                     contact = m.group(2).strip() if m.group(2) else None
                     if contact:
                         controller.execute_command("whatsapp", "search_contact", contact=contact)
-                        time.sleep(0.8)
+                        time.sleep(0.5)
                     return controller.execute_command("whatsapp", "send_message", message=message)
         except Exception as e:
             logger.exception("WhatsApp handler failed: %s", e)

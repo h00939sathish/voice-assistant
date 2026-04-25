@@ -2,18 +2,24 @@
 Skill Router - Routes commands to skills using the registry.
 Hybrid approach: keyword matching first, then LLM classification.
 """
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional, Union
 from pathlib import Path
 from collections import OrderedDict
 
 try:
     import ollama
+    import asyncio as _asyncio
 except ImportError:
     ollama = None
 
 from assistant.skills_registry import SkillsRegistry
 from assistant.skill_response import SkillResponse
 from assistant.interfaces import ILLMProvider, ITTSProvider
+from assistant.mcp_subprocess_loader import MCPSubprocessLoader, MCPSubprocessProxy
+
+# Thread pool for parallel skill imports
+_import_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="skill_import")
 
 
 class SkillRouter:
@@ -22,6 +28,27 @@ class SkillRouter:
     1. Fast keyword matching via registry (~1ms)
     2. LLM classification for ambiguous queries (~150ms)
     """
+
+    _DIRECT_ROUTE_SKILLS = {
+        "browser",
+        "calendar",
+        "clipboard",
+        "file_manager",
+        "google_search",
+        "memory_control",
+        "news",
+        "quick_actions",
+        "registry",
+        "reminder",
+        "screen_awareness",
+        "system",
+        "system_monitor",
+        "time",
+        "vision",
+        "weather",
+        "web",
+        "window_manager",
+    }
 
     def __init__(self, llm_router: ILLMProvider = None, tts: ITTSProvider = None, skills_dir: str = None):
         self.llm = llm_router
@@ -46,146 +73,147 @@ class SkillRouter:
     def _import_all_skills(self):
         """Import all skill modules to trigger @skill decorators."""
         skills_dir = Path(__file__).parent.parent / "skills"
-
         if not skills_dir.exists():
-            print(f"   ⚠️ Skills directory not found: {skills_dir}")
             return
 
-        # Skills to skip if not configured
-        SKIP_SKILLS = {
-            "mcp_skill": True,  # MCP often unused
-        }
+        # Add skills dir to path for relative imports
+        import sys
+        if str(skills_dir.parent) not in sys.path:
+            sys.path.insert(0, str(skills_dir.parent))
 
-        # Import each skill module
+        # Import each skill module (excluding disabled ones)
+        disabled = set()
         for file_path in skills_dir.glob("*_skill.py"):
-            module_name = file_path.stem  # e.g., "time_skill"
-            
-            # Skip disabled skills
-            if module_name in SKIP_SKILLS:
-                print(f"   ⏭️ Skipping: {module_name} (disabled)")
+            if file_path.stem in disabled:
                 continue
                 
             try:
-                # Dynamic import
                 import importlib.util
-                spec = importlib.util.spec_from_file_location(module_name, file_path)
-                module = importlib.util.module_from_spec(spec)
-
-                # Add skills dir to path for relative imports within skills
                 import sys
-                skills_parent = str(skills_dir.parent)
-                if skills_parent not in sys.path:
-                    sys.path.insert(0, skills_parent)
-
+                spec = importlib.util.spec_from_file_location(file_path.stem, file_path)
+                if spec is None or spec.loader is None:
+                    raise ImportError(f"Could not load module spec for {file_path.name}")
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[file_path.stem] = module
                 spec.loader.exec_module(module)
             except Exception as e:
-                print(f"   ⚠️ Failed to import {module_name}: {e}")
+                print(f"   ⚠️ Failed to import {file_path.stem}: {e}")
 
     async def route(self, text: str, context: Dict[str, Any]) -> Optional[Union[str, SkillResponse]]:
         """
         Route user input to appropriate skill.
-
-        Returns:
-            Response string or SkillResponse if skill handled, None if should use LLM
+        Returns: Response string or SkillResponse if skill handled, None if should use LLM Router.
         """
-        # Phase 1: Fast keyword matching via registry
-        matched_metadata = SkillsRegistry.match_skill(text)
+        # Phase 1: Fast keyword matching for SIMPLE intents ONLY.
+        matched_name = SkillsRegistry.match_skill(text)
+        if matched_name:
+            # Check if this is a compound sentence that needs the LLM to orchestrate
+            is_compound = self._is_compound(text)
+            priority = self._coerce_priority(getattr(matched_name, "priority", 0))
+            
+            # Only intercept for ultra-fast commands (like time or media control)
+            if self._should_route_direct(matched_name.name, priority, text, is_compound):
+                print(f"   ⚡ Fast-path match: {matched_name.name}")
+                return await self._execute_skill(matched_name.name, text, context)
+                
+            print(f"   ⏩ Delegating to Agent Router (Priority {priority}, Compound: {is_compound})")
+            
+        # We no longer use a dumb 1-skill classifier. 
+        # By returning None, `main.py` will route this to `llm_router.chat()`
+        # which now has access to the full array of Tools natively and can chain them!
+        return None
 
-        if matched_metadata:
-            print(f"   🎯 Keyword match: {matched_metadata.name}")
-            instance = self._get_skill_instance(matched_metadata.name)
-            if instance:
-                try:
-                    return await instance.handle(text, context)
-                except Exception as e:
-                    print(f"   ⚠️ Skill error: {e}")
-                    return None
+    @staticmethod
+    def _coerce_priority(priority: Any) -> int:
+        try:
+            return int(priority)
+        except (TypeError, ValueError):
+            return 0
 
-        # Phase 2: LLM classification for ambiguous queries
-        classified_name = await self._llm_classify(text)
+    @staticmethod
+    def _is_compound(text: str) -> bool:
+        lowered = (text or "").lower()
+        markers = (" and then ", " after that ", " and also ", " first do ", " then do ", " plus ")
+        if any(marker in lowered for marker in markers):
+            return True
+        return any(word in lowered.split() for word in ["and", "then", "also", "plus"])
 
-        if classified_name:
-            print(f"   🧠 LLM classified: {classified_name}")
-            instance = self._get_skill_instance(classified_name)
-            if instance:
-                try:
-                    return await instance.handle(text, context)
-                except Exception as e:
-                    print(f"   ⚠️ Skill error: {e}")
-                    return None
+    def _should_route_direct(self, skill_name: str, priority: int, text: str, is_compound: bool) -> bool:
+        if is_compound:
+            return False
+        if priority >= 8:
+            return True
+        if skill_name in self._DIRECT_ROUTE_SKILLS:
+            return True
+        return False
 
-        # No skill matched - let main LLM handle it
+    async def _execute_skill(self, name: str, text: str, context: Dict[str, Any]) -> Optional[Union[str, SkillResponse]]:
+        """Helper to safely execute a skill by name."""
+        instance = self._get_skill_instance(name)
+        if instance:
+            try:
+                if name == "browser" and hasattr(instance, "handle_tool_call"):
+                    return await instance.handle_tool_call({"tool_name": text, "command": text}, context)
+                return await instance.handle(text, context)
+            except Exception as e:
+                print(f"   ⚠️ Skill error ({name}): {e}")
         return None
 
     async def _llm_classify(self, text: str) -> Optional[str]:
-        """Use small LLM to classify intent."""
-        if not self._instances or ollama is None:
-            return None
-
-        # Build skill list from registry
-        skill_list = ", ".join([
-            f"{name}: {meta.description}"
-            for name, meta in SkillsRegistry.get_all_skills().items()
-            if meta.enabled
-        ])
-
-        prompt = f"""Classify this user request into one of these skills, or respond "general" if none match.
-Skills: {skill_list}
-
-User: "{text}"
-Respond with ONLY the skill name or "general". Nothing else."""
-
-        try:
-            response = ollama.chat(
-                model=self._classifier_model,
-                messages=[{"role": "user", "content": prompt}],
-                options={"num_predict": 20}  # Very short response
-            )
-            result = response['message']['content'].strip().lower()
-
-            # Clean up response
-            result = result.replace('"', '').replace("'", "").strip()
-
-            if result == "general":
-                return None
-            
-            # Verify skill exists in registry
-            return result if SkillsRegistry.get_skill(result) else None
-
-        except Exception as e:
-            print(f"   ⚠️ Classification failed: {e}")
-            return None
+        return None
 
     def get_skill_names(self) -> List[str]:
         """Get list of loaded skill names."""
         return SkillsRegistry.get_skill_names()
 
     def _get_skill_instance(self, name: str) -> Optional[Any]:
-        """Lazy load skill instance with LRU management."""
+        """Lazy load skill instance (or MCP subprocess proxy) with LRU management."""
         if name in self._instances:
-            # Move to end (most recently used)
             self._instances.move_to_end(name)
             return self._instances[name]
-            
-        # Check limit and evict LRU if needed
-        if len(self._instances) >= self._max_active_skills:
-            evicted_name, _ = self._instances.popitem(last=False)
-            print(f"   🧹 LRU: Evicted skill {evicted_name} to save memory")
 
+        # Evict LRU if at capacity
+        if len(self._instances) >= self._max_active_skills:
+            evicted_name, evicted_instance = self._instances.popitem(last=False)
+            self._evict(evicted_name, evicted_instance)
+
+        meta = SkillsRegistry.get_skill(name)
+        if not meta:
+            return None
+
+        # Route to subprocess proxy if mcp_isolated
+        if meta.mcp_isolated and meta.script_path:
+            print(f"   🔀 MCP subprocess: launching {name}...")
+            try:
+                loader = MCPSubprocessLoader(script_path=meta.script_path, name=name)
+                proxy = MCPSubprocessProxy(loader)
+                self._instances[name] = proxy
+                return proxy
+            except Exception as e:
+                print(f"   ⚠️ MCP subprocess launch failed ({name}): {e}")
+                return None
+
+        # Standard in-process lazy load
         print(f"   🛠️ Lazy loading skill: {name}...")
         try:
             instance = SkillsRegistry.create_instance(name)
             if instance:
-                # Inject TTS if needed
                 if name == "reminder" and self.tts and hasattr(instance, "set_tts_callback"):
                     instance.set_tts_callback(self.tts)
-                
                 self._instances[name] = instance
                 return instance
         except Exception as e:
             print(f"   ⚠️ Failed to lazy load {name}: {e}")
-            
+
         return None
+
+    def _evict(self, name: str, instance: Any) -> None:
+        """Properly evict a skill: shutdown subprocess proxies, GC in-process instances."""
+        if hasattr(instance, 'shutdown'):
+            instance.shutdown()  # kills subprocess, frees RAM immediately
+            print(f"   💀 MCP subprocess evicted: {name}")
+        else:
+            print(f"   🧹 LRU evicted: {name}")
 
     def get_skill_info(self, name: str) -> Optional[Dict[str, Any]]:
         """Get information about a specific skill."""
