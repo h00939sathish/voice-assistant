@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "jarvis-companion": {
+      "command": "python",
+      "args": ["C:/Users/h0093/Documents/new/mcp-server/jarvis_companion_mcp.py"],
+      "env": {
+        "JARVIS_DASHBOARD_URL": "http://127.0.0.1:5050"
+      }
+    },
+    "buddy": {
+      "command": "python",
+      "args": ["C:/Users/h0093/Documents/new/mcp-server/server.py"],
+      "env": {
+        "BUDDY_API_URL": "http://localhost:8765"
+      }
+    }
+  }
+}
