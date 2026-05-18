@@ -11,36 +11,30 @@ and caching have been extracted to separate modules:
 import asyncio
 import json
 import re
-from typing import Optional, List, Dict, Any, Callable
+from collections.abc import Callable
+from typing import Any
 
+from assistant.fact_extractor import FactExtractor
+from assistant.interfaces import ILLMProvider
+from assistant.llm_cache import LLMResponseCache
+from assistant.llm_fallback import FallbackChain, FallbackConfig, determine_intent
+from assistant.llm_providers import (
+    ProviderRegistry,
+    chat_gemini,
+    chat_groq,
+    chat_lmstudio,
+    chat_nvidia,
+    chat_ollama,
+    chat_openrouter,
+)
+from assistant.personality import SYSTEM_PROMPT
+from assistant.task_executor import TaskState, TaskStep
+from assistant.tool_runner import ToolRunner, ToolStatus
 from config import (
     DYNAMIC_TOOL_DISCOVERY_ENABLED,
     DYNAMIC_TOOL_DISCOVERY_TOP_K,
-    GEMINI_MODEL,
-    OPENROUTER_MODEL,
-    NVIDIA_MODEL,
-    LMSTUDIO_MODEL,
-    MEMORY_MIN_CONFIDENCE,
-    MEMORY_MAX_RESULTS,
     LLM_PRIORITY_MODE,
 )
-from assistant.personality import SYSTEM_PROMPT
-from assistant.fact_extractor import FactExtractor
-from assistant.interfaces import ILLMProvider
-from assistant.task_executor import TaskStep, TaskState
-from assistant.tool_runner import ToolRunner, ToolStatus
-
-from assistant.llm_providers import (
-    ProviderRegistry,
-    chat_ollama,
-    chat_lmstudio,
-    chat_groq,
-    chat_nvidia,
-    chat_openrouter,
-    chat_gemini,
-)
-from assistant.llm_fallback import determine_intent, FallbackChain, FallbackConfig
-from assistant.llm_cache import LLMResponseCache
 
 
 class LLMRouter(ILLMProvider):
@@ -139,7 +133,7 @@ class LLMRouter(ILLMProvider):
         self._last_batch_should_halt = False
         self._last_batch_halt_message = ""
 
-        self._status_callback: Optional[Callable[[str], None]] = None
+        self._status_callback: Callable[[str], None] | None = None
 
         self._start_health_checks()
 
@@ -168,9 +162,9 @@ class LLMRouter(ILLMProvider):
 
     async def _execute_tool_batch(
         self,
-        tool_calls: List[Dict[str, Any]],
+        tool_calls: list[dict[str, Any]],
         user_message: str,
-    ) -> List[str]:
+    ) -> list[str]:
         self._last_batch_should_halt = False
         self._last_batch_halt_message = ""
         if not tool_calls:
@@ -208,8 +202,8 @@ class LLMRouter(ILLMProvider):
         )
         task = await self._task_executor.run(task.id)
 
-        results: List[str] = []
-        for tool_call, step in zip(tool_calls, task.steps):
+        results: list[str] = []
+        for tool_call, step in zip(tool_calls, task.steps, strict=False):
             if step.status == "done":
                 results.append(step.result or f"{tool_call['name']} completed.")
             elif step.result_status in {
@@ -249,26 +243,15 @@ class LLMRouter(ILLMProvider):
         return any(kw in lower for kw in self._SKIP_MEMORY_PHRASES)
 
     def _build_messages(
-        self, user_message: str, history: List[Dict[str, str]]
-    ) -> List[Dict[str, str]]:
+        self, user_message: str, history: list[dict[str, str]]
+    ) -> list[dict[str, str]]:
         memory_prompt = ""
 
         if self.long_term_memory and not self._should_skip_memory(user_message):
             try:
-                curated_facts = self.long_term_memory.get_facts_for_prompt()
-                if curated_facts:
-                    memory_prompt += "\n\nUSER FACTS:\n" + curated_facts
-
-                relevant_memories = self.long_term_memory.search(
-                    query=user_message,
-                    limit=MEMORY_MAX_RESULTS,
-                    min_confidence=MEMORY_MIN_CONFIDENCE,
-                )
-                if relevant_memories:
-                    memory_lines = [f"- {m.content}" for m in relevant_memories]
-                    memory_prompt += "\n\nRELEVANT MEMORIES:\n" + "\n".join(
-                        memory_lines
-                    )
+                facts = self.long_term_memory.get_facts_for_prompt(query=user_message)
+                if facts:
+                    memory_prompt += "\n\nKNOWN FACTS:\n" + facts
 
                 relationships = self.long_term_memory.get_relationship_context(
                     user_message
@@ -287,18 +270,18 @@ class LLMRouter(ILLMProvider):
         return messages
 
     @staticmethod
-    def _tool_name_from_schema(schema: Dict[str, Any]) -> str:
+    def _tool_name_from_schema(schema: dict[str, Any]) -> str:
         return schema.get("function", {}).get("name", "")
 
     @staticmethod
-    def _compact_tool(schema: Dict[str, Any]) -> Dict[str, str]:
+    def _compact_tool(schema: dict[str, Any]) -> dict[str, str]:
         fn = schema.get("function", {})
         return {
             "name": fn.get("name", ""),
             "description": fn.get("description", ""),
         }
 
-    def _build_search_tools_schema(self) -> Dict[str, Any]:
+    def _build_search_tools_schema(self) -> dict[str, Any]:
         return {
             "type": "function",
             "function": {
@@ -326,7 +309,7 @@ class LLMRouter(ILLMProvider):
             },
         }
 
-    def _initial_toolset(self, all_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _initial_toolset(self, all_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not all_tools:
             return []
         if not self._dynamic_tool_discovery:
@@ -335,9 +318,9 @@ class LLMRouter(ILLMProvider):
 
     @staticmethod
     def _merge_tool_schemas(
-        base: List[Dict[str, Any]], extra: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        merged: List[Dict[str, Any]] = []
+        base: list[dict[str, Any]], extra: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
         seen: set[str] = set()
         for tool in (base or []) + (extra or []):
             name = tool.get("function", {}).get("name", "")
@@ -348,7 +331,7 @@ class LLMRouter(ILLMProvider):
         return merged
 
     @staticmethod
-    def _parse_tool_args(raw_args: Any) -> Dict[str, Any]:
+    def _parse_tool_args(raw_args: Any) -> dict[str, Any]:
         if isinstance(raw_args, dict):
             return raw_args
         if isinstance(raw_args, str):
@@ -364,8 +347,8 @@ class LLMRouter(ILLMProvider):
         return {}
 
     def _fallback_tool_discovery(
-        self, query: str, all_tools: List[Dict[str, Any]], top_k: int
-    ) -> List[Dict[str, Any]]:
+        self, query: str, all_tools: list[dict[str, Any]], top_k: int
+    ) -> list[dict[str, Any]]:
         tokens = set(re.findall(r"[a-z0-9]+", (query or "").lower()))
         scored = []
         for schema in all_tools:
@@ -385,8 +368,8 @@ class LLMRouter(ILLMProvider):
 
     @staticmethod
     def _normalize_model_tool_call(
-        fn_name: str, args: Dict[str, Any], user_message: str
-    ) -> tuple[str, Dict[str, Any]]:
+        fn_name: str, args: dict[str, Any], user_message: str
+    ) -> tuple[str, dict[str, Any]]:
         normalized_name = fn_name
         normalized_args = dict(args or {})
 
@@ -426,8 +409,8 @@ class LLMRouter(ILLMProvider):
         return normalized_name, normalized_args
 
     async def _discover_tools(
-        self, query: str, all_tools: List[Dict[str, Any]], top_k: int
-    ) -> List[Dict[str, Any]]:
+        self, query: str, all_tools: list[dict[str, Any]], top_k: int
+    ) -> list[dict[str, Any]]:
         if not all_tools:
             return []
 
@@ -469,7 +452,7 @@ class LLMRouter(ILLMProvider):
 
     async def _get_all_tools_async(
         self, query: str = "", prefilter: bool = True
-    ) -> List[Dict]:
+    ) -> list[dict]:
         from assistant.skills_registry import registry
 
         tools = registry.get_tool_definitions()
@@ -487,8 +470,8 @@ class LLMRouter(ILLMProvider):
                     )
                 else:
                     self._emit_subsystem_health("mcp", "degraded", "no tools loaded")
-        except asyncio.TimeoutError:
-            print(f"   [!] MCP dynamic tool discovery timed out after 5.0 seconds.")
+        except TimeoutError:
+            print("   [!] MCP dynamic tool discovery timed out after 5.0 seconds.")
             self._emit_subsystem_health("mcp", "degraded", "discovery timeout")
         except Exception as e:
             print(f"   [!] Failed to pull dynamic MCP tools: {e}")
@@ -557,7 +540,7 @@ class LLMRouter(ILLMProvider):
     async def _classify_intent(self, text: str) -> str:
         return determine_intent(text)
 
-    async def _handle_task_control_message(self, user_message: str) -> Optional[str]:
+    async def _handle_task_control_message(self, user_message: str) -> str | None:
         if not self._task_executor:
             return None
 
@@ -669,7 +652,7 @@ class LLMRouter(ILLMProvider):
         )
 
     async def chat(
-        self, user_message: str, history: Optional[List[Dict[str, str]]] = None
+        self, user_message: str, history: list[dict[str, str]] | None = None
     ) -> str:
         response = None
         self._fallback_chain.reset()
@@ -735,6 +718,10 @@ class LLMRouter(ILLMProvider):
             response = await self._call_provider(
                 name, method, user_message, history, tools if name != "Gemini" else None
             )
+
+            if getattr(self, "_last_batch_should_halt", False):
+                response = self._last_batch_halt_message
+                break
 
             if response:
                 break
@@ -859,7 +846,7 @@ class LLMRouter(ILLMProvider):
     ):
         return await chat_gemini(provider, build_messages_fn, user_message, history)
 
-    def get_memory_stats(self) -> Dict[str, Any]:
+    def get_memory_stats(self) -> dict[str, Any]:
         stats = {}
         if self.long_term_memory:
             ltm_stats = self.long_term_memory.get_stats()

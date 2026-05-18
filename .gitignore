@@ -1,6 +1,23 @@
 # Environment variables
 .env
 
+# SQLite WAL files
+*.db-shm
+*.db-wal
+
+# Model binaries
+*.onnx
+
+# Temp bootstrap
+tmp_ensurepip/
+
+# Cache
+.ruff_cache/
+.pytest_cache/
+
+# Backups
+backups/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -14,6 +31,8 @@ ENV/
 # Cache
 cache/
 *.cache
+.ruff_cache/
+.pytest_cache/
 
 # Logs
 logs/
@@ -35,3 +54,4 @@ backups/
 # OS
 .DS_Store
 Thumbs.db
+.gitnexus

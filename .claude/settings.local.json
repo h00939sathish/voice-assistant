@@ -5,7 +5,8 @@
       "WebSearch",
       "Bash(python test_memory.py)",
       "Bash(python -c \"print\\(''Testing unicode...''\\)\")",
-      "Bash(pytest:*)"
+      "Bash(pytest:*)",
+      "Bash(cp:*)"
     ]
   }
 }

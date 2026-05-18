@@ -1,18 +1,19 @@
-
-import time
-import psutil
 import logging
+import time
 from datetime import datetime
-from typing import Optional
+
+import psutil
+
 from config import (
-    PROACTIVE_SETTINGS,
     DESKTOP_AWARENESS_ENABLED,
+    DESKTOP_AWARENESS_HISTORY,
     DESKTOP_AWARENESS_INTERVAL,
     DESKTOP_AWARENESS_OCR,
-    DESKTOP_AWARENESS_HISTORY,
+    PROACTIVE_SETTINGS,
 )
 
 logger = logging.getLogger(__name__)
+
 
 class ProactiveEngine:
     """
@@ -21,8 +22,9 @@ class ProactiveEngine:
     Run check_triggers() periodically from the main loop.
     """
 
-    def __init__(self):
+    def __init__(self, memory_system=None):
         self.settings = PROACTIVE_SETTINGS
+        self.memory_system = memory_system
         self.last_check = time.time()
         self.triggered_events = {
             "battery_low": 0,
@@ -30,6 +32,7 @@ class ProactiveEngine:
             "morning_greeting": 0,
             "night_mode": 0,
             "idle_reminder": 0,
+            "memory_recall": 0,
             # "screen_issue": 0,  # Disabled - unstable
         }
         self.COOLDOWNS = {
@@ -38,6 +41,7 @@ class ProactiveEngine:
             "morning_greeting": 86400,
             "night_mode": 43200,
             "idle_reminder": 7200,
+            "memory_recall": 86400,
             # "screen_issue": 300,  # Disabled
         }
 
@@ -46,6 +50,7 @@ class ProactiveEngine:
         if DESKTOP_AWARENESS_ENABLED:
             try:
                 from assistant.desktop_awareness import DesktopAwareness
+
                 self.desktop_awareness = DesktopAwareness(
                     interval=DESKTOP_AWARENESS_INTERVAL,
                     ocr_enabled=DESKTOP_AWARENESS_OCR,
@@ -57,7 +62,7 @@ class ProactiveEngine:
 
         logger.info("   🧠 Proactive Engine initialized")
 
-    def check_triggers(self, last_activity_time: float) -> Optional[str]:
+    def check_triggers(self, last_activity_time: float) -> str | None:
         """
         Check all triggers and return a suggestion string if active.
         Args:
@@ -65,108 +70,112 @@ class ProactiveEngine:
         """
         if not self.settings.get("ENABLED", False):
             return None
-        
-        # Low-Power Mode: Disable proactive if battery < 15%
-        battery = psutil.sensors_battery() if hasattr(psutil, "sensors_battery") else None
+
+        battery = (
+            psutil.sensors_battery() if hasattr(psutil, "sensors_battery") else None
+        )
         if battery and not battery.power_plugged and battery.percent < 15:
             return None
 
         now = time.time()
         if now - self.last_check < self.settings.get("CHECK_INTERVAL", 60):
             return None
-        
+
         self.last_check = now
 
-        # Priority 1: Battery (Critical)
         suggestion = self._check_battery()
         if suggestion:
             return suggestion
 
-        # Priority 2: System Memory
         suggestion = self._check_low_memory()
         if suggestion:
             return suggestion
 
-        # Priority 3: Time (Greeting/Night)
         suggestion = self._check_time_of_day()
         if suggestion:
             return suggestion
 
-        # Priority 4: Screen Awareness (Error/Struggle detection) - disable if unstable
+        suggestion = self._check_memory_context()
+        if suggestion:
+            return suggestion
+
         # suggestion = self._check_screen_context()
         # if suggestion:
         #     return suggestion
 
-        # Priority 5: Idle (Engagement)
         suggestion = self._check_idle(last_activity_time)
         if suggestion:
             return suggestion
 
         return None
 
-    def _check_battery(self) -> Optional[str]:
+    def _check_battery(self) -> str | None:
         """Check battery level against threshold"""
         if not hasattr(psutil, "sensors_battery"):
             return None
-            
+
         battery = psutil.sensors_battery()
         if not battery or battery.power_plugged:
             return None
 
         threshold = self.settings.get("BATTERY_THRESHOLD", 20)
-        
+
         if battery.percent <= threshold:
             if self._can_trigger("battery_low"):
                 self._mark_triggered("battery_low")
                 return f"Excuse me, your battery is at {battery.percent}%. Shall I enable power saver mode?"
-        
+
         return None
 
-    def _check_time_of_day(self) -> Optional[str]:
+    def _check_time_of_day(self) -> str | None:
         """Check for morning/night triggers"""
         current_hour = datetime.now().hour
-        
+
         # Morning Greeting
         morning_start = self.settings.get("MORNING_HOUR", 8)
         if current_hour == morning_start:
-             if self._can_trigger("morning_greeting"):
+            if self._can_trigger("morning_greeting"):
                 self._mark_triggered("morning_greeting")
                 return "Good morning! I've prepared your daily briefing. Would you like to hear it?"
-        
-        # Night Mode Suggestion  
+
+        # Night Mode Suggestion
         night_start = self.settings.get("NIGHT_HOUR", 22)
         if current_hour >= night_start:
-             if self._can_trigger("night_mode"):
+            if self._can_trigger("night_mode"):
                 self._mark_triggered("night_mode")
                 return "It's getting late. Should I enable night mode and reduce screen brightness?"
-                
+
         return None
 
-    def _check_memory_context(self, memory_system) -> Optional[str]:
-        """Check memory for relevant context or remind about important items"""
-        if not memory_system or not self.settings.get("CONTEXT_AWARENESS", True):
+    def _check_memory_context(self) -> str | None:
+        """Periodically surface a relevant memory unasked."""
+        if not self.memory_system or not self.settings.get("CONTEXT_AWARENESS", True):
             return None
-        
+        if not self._can_trigger("memory_recall"):
+            return None
         try:
-            # Get pending items or important memories
-            stats = memory_system.get_stats()
-            if stats and stats.get("total_memories", 0) > 0:
-                # Could offer to recall something relevant
-                pass
+            stats = self.memory_system.get_stats()
+            if not stats or stats.get("total_memories", 0) < 2:
+                return None
+            recent = self.memory_system.get_recent(limit=3, min_confidence=0.8)
+            if recent:
+                fact = recent[0]
+                self._mark_triggered("memory_recall")
+                return f"By the way, I remember: {fact.content}. Would you like me to expand on that?"
         except Exception:
             pass
         return None
 
-    def _check_low_memory(self) -> Optional[str]:
+    def _check_low_memory(self) -> str | None:
         """Check system memory (RAM) levels"""
         if not self.settings.get("LOW_MEMORY_WARNING_MB"):
             return None
-        
+
         try:
             mem = psutil.virtual_memory()
             available_mb = mem.available / (1024 * 1024)
             threshold = self.settings.get("LOW_MEMORY_WARNING_MB", 512)
-            
+
             if available_mb < threshold:
                 if self._can_trigger("low_memory"):
                     self._mark_triggered("low_memory")
@@ -175,19 +184,19 @@ class ProactiveEngine:
             pass
         return None
 
-    def _check_idle(self, last_activity: float) -> Optional[str]:
+    def _check_idle(self, last_activity: float) -> str | None:
         """Check if user has been idle"""
         idle_duration = time.time() - last_activity
         threshold = self.settings.get("IDLE_THRESHOLD", 3600)
-        
+
         if idle_duration > threshold:
-             if self._can_trigger("idle_reminder"):
+            if self._can_trigger("idle_reminder"):
                 self._mark_triggered("idle_reminder")
                 return "I've noticed you've been quiet. Is there anything I can help you with?"
-                
+
         return None
 
-    def _check_screen_context(self) -> Optional[str]:
+    def _check_screen_context(self) -> str | None:
         """Check desktop screen for errors or user struggles via OCR."""
         if not self.desktop_awareness:
             return None
@@ -201,7 +210,6 @@ class ProactiveEngine:
             pass
 
         return None
-
 
     def _can_trigger(self, event_name: str) -> bool:
         """Check if event is off cooldown"""

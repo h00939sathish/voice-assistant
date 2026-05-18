@@ -4,9 +4,7 @@ import os
 import subprocess
 import winreg
 from datetime import datetime, timedelta
-from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Optional
 
 from rapidfuzz import fuzz, process
 
@@ -36,7 +34,7 @@ class AppManager:
             logger.error(f"Error deleting cache file: {e}")
             return "There was an error while trying to rescan applications."
 
-    def _load_custom_apps(self) -> Dict[str, str]:
+    def _load_custom_apps(self) -> dict[str, str]:
         """Loads app paths from a custom JSON file and adds them to memory."""
         custom_apps_path = Path(__file__).with_name("custom_apps.json")
         if custom_apps_path.exists():
@@ -47,7 +45,7 @@ class AppManager:
                 logger.error(f"Error reading {custom_apps_path}: {e}")
         return {}
 
-    def _load_apps_with_cache(self) -> Dict[str, str]:
+    def _load_apps_with_cache(self) -> dict[str, str]:
         """Loads apps from cache or rescans, with robust error handling."""
         if self.cache_file.exists():
             if (
@@ -76,7 +74,7 @@ class AppManager:
 
         return apps
 
-    def _scan_store_apps(self) -> Dict[str, str]:
+    def _scan_store_apps(self) -> dict[str, str]:
         """Scans installed Microsoft Store (UWP) apps and normalizes their paths."""
         apps = {}
         command = "Get-StartApps | Select-Object Name, AppId | ConvertTo-Json"
@@ -106,12 +104,20 @@ class AppManager:
             logger.error(f"Error scanning Microsoft Store apps: {e}")
         return apps
 
-    def _scan_start_menu(self) -> Dict[str, str]:
+    def _scan_start_menu(self) -> dict[str, str]:
         """Scans Windows Start Menu, prioritizing .lnk files over .exe files."""
         apps = {}
         start_paths = [
-            Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs",
-            Path(os.environ["PROGRAMDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs",
+            Path(os.environ["APPDATA"])
+            / "Microsoft"
+            / "Windows"
+            / "Start Menu"
+            / "Programs",
+            Path(os.environ["PROGRAMDATA"])
+            / "Microsoft"
+            / "Windows"
+            / "Start Menu"
+            / "Programs",
         ]
         for path in start_paths:
             if not path.exists():
@@ -123,7 +129,7 @@ class AppManager:
                     apps[item.stem.lower()] = str(item)
         return apps
 
-    def _scan_registry_apps(self) -> Dict[str, str]:
+    def _scan_registry_apps(self) -> dict[str, str]:
         """Scans the registry for app paths and validates their existence."""
         apps = {}
         reg_paths = [
@@ -146,8 +152,7 @@ class AppManager:
                 continue
         return apps
 
-    @lru_cache(maxsize=256)
-    def find_best_match(self, query: str) -> Optional[str]:
+    def find_best_match(self, query: str) -> str | None:
         """Finds the best application match using improved fuzzy logic."""
         if not self.apps:
             return None

@@ -2,21 +2,23 @@
 Skill Router - Routes commands to skills using the registry.
 Hybrid approach: keyword matching first, then LLM classification.
 """
-from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Any, List, Optional, Union
-from pathlib import Path
+
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any
 
 try:
-    import ollama
     import asyncio as _asyncio
+
+    import ollama
 except ImportError:
     ollama = None
 
-from assistant.skills_registry import SkillsRegistry
-from assistant.skill_response import SkillResponse
 from assistant.interfaces import ILLMProvider, ITTSProvider
 from assistant.mcp_subprocess_loader import MCPSubprocessLoader, MCPSubprocessProxy
+from assistant.skill_response import SkillResponse
+from assistant.skills_registry import SkillsRegistry
 
 # Thread pool for parallel skill imports
 _import_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="skill_import")
@@ -50,9 +52,20 @@ class SkillRouter:
         "window_manager",
     }
 
-    def __init__(self, llm_router: ILLMProvider = None, tts: ITTSProvider = None, skills_dir: str = None):
+    def __init__(
+        self,
+        llm_router: ILLMProvider = None,
+        tts: ITTSProvider = None,
+        skills_dir: str = None,
+        tool_runner: Any = None,
+    ):
         self.llm = llm_router
         self.tts = tts
+        self.tool_runner = tool_runner or (
+            llm_router.get_tool_runner()
+            if llm_router is not None and hasattr(llm_router, "get_tool_runner")
+            else None
+        )
         self._classifier_model = "gemma:2b"  # Fast, small model for classification
         self._instances = OrderedDict()  # LRU Cache for skill instances
         self._max_active_skills = 5
@@ -63,12 +76,12 @@ class SkillRouter:
 
         # Import all skill modules to trigger registration
         self._import_all_skills()
-        
+
         # Log discovered skills (but don't instantiate yet)
         skills = SkillsRegistry.get_all_skills()
         print(f"   Note: {len(skills)} skills registered (Lazy Loading Enabled)")
         for name, meta in skills.items():
-             print(f"   - {name}: {meta.description[:50]}...")
+            print(f"   - {name}: {meta.description[:50]}...")
 
     def _import_all_skills(self):
         """Import all skill modules to trigger @skill decorators."""
@@ -78,28 +91,40 @@ class SkillRouter:
 
         # Add skills dir to path for relative imports
         import sys
+
         if str(skills_dir.parent) not in sys.path:
             sys.path.insert(0, str(skills_dir.parent))
 
-        # Import each skill module (excluding disabled ones)
+        # Import each skill module (excluding disabled ones) with timeout
         disabled = set()
+        skill_import_timeout = 30
+
+        def _import_one(spec, file_path):
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[file_path.stem] = module
+            spec.loader.exec_module(module)
+
         for file_path in skills_dir.glob("*_skill.py"):
             if file_path.stem in disabled:
                 continue
-                
+
             try:
                 import importlib.util
                 import sys
+
                 spec = importlib.util.spec_from_file_location(file_path.stem, file_path)
                 if spec is None or spec.loader is None:
-                    raise ImportError(f"Could not load module spec for {file_path.name}")
-                module = importlib.util.module_from_spec(spec)
-                sys.modules[file_path.stem] = module
-                spec.loader.exec_module(module)
+                    raise ImportError(
+                        f"Could not load module spec for {file_path.name}"
+                    )
+                future = _import_pool.submit(_import_one, spec, file_path)
+                future.result(timeout=skill_import_timeout)
             except Exception as e:
                 print(f"   ⚠️ Failed to import {file_path.stem}: {e}")
 
-    async def route(self, text: str, context: Dict[str, Any]) -> Optional[Union[str, SkillResponse]]:
+    async def route(
+        self, text: str, context: dict[str, Any]
+    ) -> str | SkillResponse | None:
         """
         Route user input to appropriate skill.
         Returns: Response string or SkillResponse if skill handled, None if should use LLM Router.
@@ -110,15 +135,19 @@ class SkillRouter:
             # Check if this is a compound sentence that needs the LLM to orchestrate
             is_compound = self._is_compound(text)
             priority = self._coerce_priority(getattr(matched_name, "priority", 0))
-            
+
             # Only intercept for ultra-fast commands (like time or media control)
-            if self._should_route_direct(matched_name.name, priority, text, is_compound):
+            if self._should_route_direct(
+                matched_name.name, priority, text, is_compound
+            ):
                 print(f"   ⚡ Fast-path match: {matched_name.name}")
                 return await self._execute_skill(matched_name.name, text, context)
-                
-            print(f"   ⏩ Delegating to Agent Router (Priority {priority}, Compound: {is_compound})")
-            
-        # We no longer use a dumb 1-skill classifier. 
+
+            print(
+                f"   ⏩ Delegating to Agent Router (Priority {priority}, Compound: {is_compound})"
+            )
+
+        # We no longer use a dumb 1-skill classifier.
         # By returning None, `main.py` will route this to `llm_router.chat()`
         # which now has access to the full array of Tools natively and can chain them!
         return None
@@ -133,12 +162,21 @@ class SkillRouter:
     @staticmethod
     def _is_compound(text: str) -> bool:
         lowered = (text or "").lower()
-        markers = (" and then ", " after that ", " and also ", " first do ", " then do ", " plus ")
+        markers = (
+            " and then ",
+            " after that ",
+            " and also ",
+            " first do ",
+            " then do ",
+            " plus ",
+        )
         if any(marker in lowered for marker in markers):
             return True
         return any(word in lowered.split() for word in ["and", "then", "also", "plus"])
 
-    def _should_route_direct(self, skill_name: str, priority: int, text: str, is_compound: bool) -> bool:
+    def _should_route_direct(
+        self, skill_name: str, priority: int, text: str, is_compound: bool
+    ) -> bool:
         if is_compound:
             return False
         if priority >= 8:
@@ -147,26 +185,42 @@ class SkillRouter:
             return True
         return False
 
-    async def _execute_skill(self, name: str, text: str, context: Dict[str, Any]) -> Optional[Union[str, SkillResponse]]:
+    async def _execute_skill(
+        self, name: str, text: str, context: dict[str, Any]
+    ) -> str | SkillResponse | None:
         """Helper to safely execute a skill by name."""
+        if self.tool_runner is not None:
+            args = {"command": text, "tool_name": text}
+            result = await self.tool_runner.execute(
+                name,
+                args,
+                user_intent=text,
+                context=context,
+            )
+            if result.status == "ok":
+                return result.data if result.data is not None else result.summary
+            return result.to_content_str()
+
         instance = self._get_skill_instance(name)
         if instance:
             try:
                 if name == "browser" and hasattr(instance, "handle_tool_call"):
-                    return await instance.handle_tool_call({"tool_name": text, "command": text}, context)
+                    return await instance.handle_tool_call(
+                        {"tool_name": text, "command": text}, context
+                    )
                 return await instance.handle(text, context)
             except Exception as e:
                 print(f"   ⚠️ Skill error ({name}): {e}")
         return None
 
-    async def _llm_classify(self, text: str) -> Optional[str]:
+    async def _llm_classify(self, text: str) -> str | None:
         return None
 
-    def get_skill_names(self) -> List[str]:
+    def get_skill_names(self) -> list[str]:
         """Get list of loaded skill names."""
         return SkillsRegistry.get_skill_names()
 
-    def _get_skill_instance(self, name: str) -> Optional[Any]:
+    def _get_skill_instance(self, name: str) -> Any | None:
         """Lazy load skill instance (or MCP subprocess proxy) with LRU management."""
         if name in self._instances:
             self._instances.move_to_end(name)
@@ -198,7 +252,11 @@ class SkillRouter:
         try:
             instance = SkillsRegistry.create_instance(name)
             if instance:
-                if name == "reminder" and self.tts and hasattr(instance, "set_tts_callback"):
+                if (
+                    name == "reminder"
+                    and self.tts
+                    and hasattr(instance, "set_tts_callback")
+                ):
                     instance.set_tts_callback(self.tts)
                 self._instances[name] = instance
                 return instance
@@ -209,13 +267,13 @@ class SkillRouter:
 
     def _evict(self, name: str, instance: Any) -> None:
         """Properly evict a skill: shutdown subprocess proxies, GC in-process instances."""
-        if hasattr(instance, 'shutdown'):
+        if hasattr(instance, "shutdown"):
             instance.shutdown()  # kills subprocess, frees RAM immediately
             print(f"   💀 MCP subprocess evicted: {name}")
         else:
             print(f"   🧹 LRU evicted: {name}")
 
-    def get_skill_info(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_skill_info(self, name: str) -> dict[str, Any] | None:
         """Get information about a specific skill."""
         meta = SkillsRegistry.get_skill(name)
         if meta:
@@ -225,7 +283,7 @@ class SkillRouter:
                 "keywords": meta.keywords,
                 "priority": meta.priority,
                 "requires_internet": meta.requires_internet,
-                "enabled": meta.enabled
+                "enabled": meta.enabled,
             }
         return None
 

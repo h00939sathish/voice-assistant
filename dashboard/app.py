@@ -2,11 +2,14 @@
 Buddy Dashboard — lightweight Flask web server.
 Runs on http://localhost:5050 alongside the main assistant.
 """
-import sqlite3
+
 import logging
-from pathlib import Path
+import sqlite3
 from datetime import datetime
-from flask import Flask, render_template, Response, jsonify, request, abort
+from pathlib import Path
+
+from flask import Flask, Response, abort, jsonify, render_template, request
+
 from gui.operator_dashboard import OperatorDashboard
 
 logger = logging.getLogger("buddy.dashboard")
@@ -27,9 +30,22 @@ app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 
-def init(bridge, wake_cb=None, clear_memory_cb=None, toggle_mic_cb=None, confirm_cb=None, chat_cb=None):
+def init(
+    bridge,
+    wake_cb=None,
+    clear_memory_cb=None,
+    toggle_mic_cb=None,
+    confirm_cb=None,
+    chat_cb=None,
+):
     """Called from main.py to inject the DashboardBridge and assistant callbacks."""
-    global _bridge, _wake_callback, _clear_memory_callback, _toggle_mic_callback, _confirm_callback, _chat_callback
+    global \
+        _bridge, \
+        _wake_callback, \
+        _clear_memory_callback, \
+        _toggle_mic_callback, \
+        _confirm_callback, \
+        _chat_callback
     _bridge = bridge
     _wake_callback = wake_cb
     _clear_memory_callback = clear_memory_cb
@@ -43,6 +59,7 @@ def init(bridge, wake_cb=None, clear_memory_cb=None, toggle_mic_cb=None, confirm
 # Pages
 # ------------------------------------------------------------------
 
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -52,6 +69,7 @@ def index():
 # SSE stream
 # ------------------------------------------------------------------
 
+
 @app.route("/stream")
 def stream():
     if _bridge is None:
@@ -60,13 +78,17 @@ def stream():
     def generator():
         yield from _bridge.drain(timeout=20.0)
 
-    return Response(generator(), mimetype="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return Response(
+        generator(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ------------------------------------------------------------------
 # REST API
 # ------------------------------------------------------------------
+
 
 @app.route("/api/status")
 def api_status():
@@ -92,7 +114,8 @@ def api_execution_log():
         return jsonify([])
     try:
         import json as _json
-        with open(log_path, "r", encoding="utf-8") as f:
+
+        with open(log_path, encoding="utf-8") as f:
             lines = f.readlines()
         entries = []
         for line in lines[-limit:]:
@@ -227,7 +250,7 @@ def api_cancel_reminder(rid: str):
         with sqlite3.connect(str(_reminder_db)) as conn:
             conn.execute(
                 "UPDATE reminders SET status = 'cancelled' WHERE id = ? AND status = 'pending'",
-                (rid,)
+                (rid,),
             )
         return jsonify({"ok": True})
     except Exception as e:
@@ -238,6 +261,7 @@ def api_cancel_reminder(rid: str):
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
 
 def _get_reminders():
     if not _reminder_db.exists():
@@ -318,7 +342,9 @@ def _merge_operator_payloads(bridge_status: dict, file_status: dict) -> dict:
         for event in bridge_events
         if event.get("kind") == "failed"
     ]
-    merged["tool_failures"] = (live_failures + (file_status.get("tool_failures", []) if file_status else []))[:10]
+    merged["tool_failures"] = (
+        live_failures + (file_status.get("tool_failures", []) if file_status else [])
+    )[:10]
 
     merged["confirmation_events"] = [
         {
@@ -328,7 +354,8 @@ def _merge_operator_payloads(bridge_status: dict, file_status: dict) -> dict:
             "timestamp": event.get("timestamp"),
         }
         for event in bridge_events
-        if event.get("kind") == "confirmation" or event.get("action") in {"requested", "approved", "denied"}
+        if event.get("kind") == "confirmation"
+        or event.get("action") in {"requested", "approved", "denied"}
     ][:10]
 
     api_stats = dict(file_status.get("api_stats", {}) if file_status else {})
@@ -338,7 +365,9 @@ def _merge_operator_payloads(bridge_status: dict, file_status: dict) -> dict:
     authority_audit = _operator_dashboard.get_authority_audit(25)
     merged["authority_audit"] = authority_audit
     merged["authority_summary"] = _compute_authority_summary(authority_audit)
-    merged["operator_metrics"] = _compute_operator_metrics(api_stats, merged["tool_failures"], merged["confirmation_events"])
+    merged["operator_metrics"] = _compute_operator_metrics(
+        api_stats, merged["tool_failures"], merged["confirmation_events"]
+    )
     return merged
 
 
@@ -351,7 +380,9 @@ def _compute_live_api_metrics(bridge_events: list) -> dict:
 
     avg_latency = 0
     if finished:
-        avg_latency = round(sum(int(e.get("duration_ms", 0) or 0) for e in finished) / len(finished))
+        avg_latency = round(
+            sum(int(e.get("duration_ms", 0) or 0) for e in finished) / len(finished)
+        )
 
     by_tool = {}
     for event in events:
@@ -373,11 +404,14 @@ def _compute_authority_summary(entries: list) -> dict:
     """Roll up authority audit rows into quick counters."""
     rows = entries or []
     approved = sum(1 for row in rows if int(row.get("was_approved", 0) or 0) == 1)
-    blocked = sum(1 for row in rows if str(row.get("action_outcome", "")).lower() == "blocked")
+    blocked = sum(
+        1 for row in rows if str(row.get("action_outcome", "")).lower() == "blocked"
+    )
     denied = sum(
         1
         for row in rows
-        if int(row.get("was_approved", 0) or 0) == 0 and str(row.get("action_outcome", "")).lower() != "blocked"
+        if int(row.get("was_approved", 0) or 0) == 0
+        and str(row.get("action_outcome", "")).lower() != "blocked"
     )
     high_risk = sum(1 for row in rows if int(row.get("risk_level", 0) or 0) >= 3)
     return {
@@ -388,7 +422,9 @@ def _compute_authority_summary(entries: list) -> dict:
     }
 
 
-def _compute_operator_metrics(api_stats: dict, tool_failures: list, confirmations: list) -> dict:
+def _compute_operator_metrics(
+    api_stats: dict, tool_failures: list, confirmations: list
+) -> dict:
     """Compose top-level operator metrics used by dashboard cards."""
     stats = api_stats or {}
     total_calls = int(stats.get("total_calls", 0) or 0)
@@ -399,12 +435,15 @@ def _compute_operator_metrics(api_stats: dict, tool_failures: list, confirmation
         "recent_failures": len(tool_failures or []),
         "recent_confirmations": len(confirmations or []),
         "avg_latency_ms": int(stats.get("avg_latency_ms", 0) or 0),
-        "live_recent_avg_latency_ms": int(stats.get("live_recent_avg_latency_ms", 0) or 0),
+        "live_recent_avg_latency_ms": int(
+            stats.get("live_recent_avg_latency_ms", 0) or 0
+        ),
     }
 
 
 def run_server(host: str = "127.0.0.1", port: int = 5050):
     """Start Flask in threaded mode (called from a daemon thread)."""
     import logging as _logging
+
     _logging.getLogger("werkzeug").setLevel(_logging.WARNING)
     app.run(host=host, port=port, threaded=True, use_reloader=False, debug=False)

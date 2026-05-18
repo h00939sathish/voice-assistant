@@ -1,0 +1,41 @@
+<h2>Final design review: AionUi pet companion for Jarvis</h2>
+<p class="subtitle">Approve this as the spec direction before it gets written into the project docs.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Core decision</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center">
+      <div class="placeholder">AionUi pet<br>mascot + click-to-talk</div>
+      <div style="font-size:28px">→</div>
+      <div class="placeholder">Jarvis<br>existing voice brain</div>
+    </div>
+    <p style="margin-top:16px">The pet sends a wake trigger. Jarvis still owns microphone capture, VAD, STT, LLM routing, tools, memory, safety gates, TTS, and follow-up listening.</p>
+  </div>
+</div>
+
+<div class="cards">
+  <div class="card" data-choice="api" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>API surface</h3>
+      <p><strong>POST /api/companion/wake</strong> triggers listening. <strong>GET /api/companion/state</strong> returns current state. <strong>WS/SSE events</strong> stream state updates to the pet.</p>
+    </div>
+  </div>
+  <div class="card" data-choice="state" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>Pet states</h3>
+      <p>IDLE → idle, LISTENING → attentive, PROCESSING → thinking, SPEAKING → talking, confirmation → bubble, error → error, completed → done then idle.</p>
+    </div>
+  </div>
+  <div class="card" data-choice="safe" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>Safety behavior</h3>
+      <p>If Jarvis is busy, wake returns accepted:false with the current state. Tool confirmations remain inside Jarvis safety gates and can be mirrored to the pet.</p>
+    </div>
+  </div>
+  <div class="card" data-choice="tests" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>Testing</h3>
+      <p>Unit tests cover wake endpoint behavior, busy-state rejection, state feed payloads, and confirmation/error event mapping. No AionUi audio upload in this first slice.</p>
+    </div>
+  </div>
+</div>

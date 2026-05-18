@@ -13,12 +13,12 @@ from assistant.llm_router import LLMRouter
 from assistant.long_term_memory import LongTermMemory
 from assistant.operator_dashboard import OperatorDashboard
 from assistant.skills_registry import SkillsRegistry
-from assistant.task_executor import TaskExecutor, TaskStep, TaskState
+from assistant.task_executor import TaskExecutor, TaskState, TaskStep
 from assistant.tool_runner import ToolResult, ToolRunner, ToolStatus
 from dashboard.app import (
-    _merge_operator_payloads,
-    _compute_live_api_metrics,
     _compute_authority_summary,
+    _compute_live_api_metrics,
+    _merge_operator_payloads,
 )
 from skills.browser_skill import BrowserSkill
 
@@ -30,16 +30,27 @@ def test_authority_gate_applies_configurable_min_level(tmp_path):
     allowed, _ = gate.check("open_app", {"name": "Calculator"})
 
     assert allowed is False
-    assert gate.get_action_outcome("open_app", {"name": "Calculator"}) == ActionOutcome.CONFIRM
+    assert (
+        gate.get_action_outcome("open_app", {"name": "Calculator"})
+        == ActionOutcome.CONFIRM
+    )
 
 
 def test_authority_gate_infers_contextual_risk_for_multiplexer_tools(tmp_path):
     gate = AuthorityGate(audit_db_path=tmp_path / "authority_audit.db")
 
     assert gate.classify_risk("calendar", {"action": "list"}) == RiskLevel.LOW
-    assert gate.classify_risk("calendar", {"action": "create", "summary": "Standup"}) == RiskLevel.HIGH
-    assert gate.classify_risk("clipboard", {"command": "read clipboard"}) == RiskLevel.LOW
-    assert gate.classify_risk("clipboard", {"command": "copy hello world"}) == RiskLevel.HIGH
+    assert (
+        gate.classify_risk("calendar", {"action": "create", "summary": "Standup"})
+        == RiskLevel.HIGH
+    )
+    assert (
+        gate.classify_risk("clipboard", {"command": "read clipboard"}) == RiskLevel.LOW
+    )
+    assert (
+        gate.classify_risk("clipboard", {"command": "copy hello world"})
+        == RiskLevel.HIGH
+    )
 
 
 def test_authority_gate_classifies_mcp_tool_by_underlying_name(tmp_path):
@@ -77,10 +88,17 @@ async def test_tool_runner_denies_confirmation_level_action_before_execution(tmp
 async def test_tool_runner_can_disable_terminal_confirmation(tmp_path):
     runner = ToolRunner(log_dir=tmp_path, allow_terminal_confirmation=False)
 
-    with patch("builtins.input", side_effect=AssertionError("terminal input should not be called")):
+    with patch(
+        "builtins.input",
+        side_effect=AssertionError("terminal input should not be called"),
+    ):
         result = await runner.execute(
             "calendar",
-            {"action": "create", "summary": "Standup", "start_time": "2026-03-26T09:00:00"},
+            {
+                "action": "create",
+                "summary": "Standup",
+                "start_time": "2026-03-26T09:00:00",
+            },
             user_intent="Schedule the standup",
         )
 
@@ -216,24 +234,30 @@ async def test_llm_router_stops_after_confirmation_denial():
     router._dynamic_tool_discovery = False
     router._decide_action = AsyncMock(return_value="use_tools")
     router._classify_intent = AsyncMock(return_value="fast")
-    router._get_all_tools_async = AsyncMock(return_value=[{
-        "type": "function",
-        "function": {
-            "name": "clipboard",
-            "description": "Clipboard control",
-            "parameters": {
-                "type": "object",
-                "properties": {"command": {"type": "string"}},
-                "required": ["command"],
-            },
-        },
-    }])
-    router._tool_runner.execute = AsyncMock(return_value=ToolResult(
-        status=ToolStatus.REQUIRES_CONFIRMATION,
-        summary="Action 'clipboard' was denied.",
-        tool_name="clipboard",
-        args={"command": "copy YouTube"},
-    ))
+    router._get_all_tools_async = AsyncMock(
+        return_value=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "clipboard",
+                    "description": "Clipboard control",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    },
+                },
+            }
+        ]
+    )
+    router._tool_runner.execute = AsyncMock(
+        return_value=ToolResult(
+            status=ToolStatus.REQUIRES_CONFIRMATION,
+            summary="Action 'clipboard' was denied.",
+            tool_name="clipboard",
+            args={"command": "copy YouTube"},
+        )
+    )
 
     tool_call_msg = {
         "role": "assistant",
@@ -266,7 +290,7 @@ def test_skills_registry_prefers_custom_tool_schema_for_browser():
 
 
 def test_browser_skill_normalizes_generic_search_command():
-    skill = BrowserSkill()
+    BrowserSkill()
     tool_name, args = LLMRouter._normalize_model_tool_call(
         "browser",
         {"command": "open Edge Browser and search for YouTube"},
@@ -294,31 +318,50 @@ def test_operator_dashboard_reads_runtime_artifacts(tmp_path):
     task_state_path = tmp_path / "task_state.json"
 
     events_path.write_text(
-        "\n".join([
-            json.dumps({"type": "SubsystemStateEvent", "subsystem": "llm", "state": "healthy"}),
-            json.dumps({"type": "SubsystemStateEvent", "subsystem": "stt", "state": "initializing"}),
-        ]),
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "SubsystemStateEvent",
+                        "subsystem": "llm",
+                        "state": "healthy",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "SubsystemStateEvent",
+                        "subsystem": "stt",
+                        "state": "initializing",
+                    }
+                ),
+            ]
+        ),
         encoding="utf-8",
     )
     exec_path.write_text(
-        json.dumps({
-            "tool_name": "weather",
-            "status": "ok",
-            "duration_ms": 120,
-            "result_summary": "Sunny",
-        }) + "\n",
+        json.dumps(
+            {
+                "tool_name": "weather",
+                "status": "ok",
+                "duration_ms": 120,
+                "result_summary": "Sunny",
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
     task_state_path.write_text(
-        json.dumps({
-            "tasks": {
-                "abc123": {
-                    "goal": "Check weather",
-                    "state": "running",
-                    "steps": [],
+        json.dumps(
+            {
+                "tasks": {
+                    "abc123": {
+                        "goal": "Check weather",
+                        "state": "running",
+                        "steps": [],
+                    }
                 }
             }
-        }),
+        ),
         encoding="utf-8",
     )
 
@@ -356,15 +399,18 @@ def test_operator_payload_merge_prefers_live_bridge_and_keeps_persisted_details(
                 "kind": "confirmation",
             },
         ],
-        "active_tasks": {
-            "task-1": {"goal": "Check weather", "action": "running"}
-        },
+        "active_tasks": {"task-1": {"goal": "Check weather", "action": "running"}},
     }
     file_status = {
         "timestamp": "2026-03-25T09:59:00",
         "subsystem_health": {"llm": "down", "stt": "healthy"},
         "recent_actions": [
-            {"tool_name": "weather", "duration_ms": 120, "result_summary": "Sunny", "status": "ok"}
+            {
+                "tool_name": "weather",
+                "duration_ms": 120,
+                "result_summary": "Sunny",
+                "status": "ok",
+            }
         ],
         "task_state": None,
         "tool_failures": [{"tool_name": "send_email", "error": "denied"}],
@@ -387,23 +433,27 @@ def test_operator_payload_merge_prefers_live_bridge_and_keeps_persisted_details(
 
 
 def test_compute_live_api_metrics_and_authority_summary():
-    metrics = _compute_live_api_metrics([
-        {"kind": "finished", "tool_name": "search_web", "duration_ms": 120},
-        {"kind": "failed", "tool_name": "send_email", "duration_ms": 90},
-        {"kind": "confirmation", "tool_name": "send_email", "action": "requested"},
-        {"kind": "finished", "tool_name": "search_web", "duration_ms": 180},
-    ])
+    metrics = _compute_live_api_metrics(
+        [
+            {"kind": "finished", "tool_name": "search_web", "duration_ms": 120},
+            {"kind": "failed", "tool_name": "send_email", "duration_ms": 90},
+            {"kind": "confirmation", "tool_name": "send_email", "action": "requested"},
+            {"kind": "finished", "tool_name": "search_web", "duration_ms": 180},
+        ]
+    )
     assert metrics["live_recent_calls"] == 4
     assert metrics["live_recent_success"] == 2
     assert metrics["live_recent_failures"] == 1
     assert metrics["live_recent_confirmations"] == 1
     assert metrics["live_top_tools"]["search_web"] == 2
 
-    summary = _compute_authority_summary([
-        {"was_approved": 1, "action_outcome": "confirm", "risk_level": 3},
-        {"was_approved": 0, "action_outcome": "confirm", "risk_level": 3},
-        {"was_approved": 0, "action_outcome": "blocked", "risk_level": 4},
-    ])
+    summary = _compute_authority_summary(
+        [
+            {"was_approved": 1, "action_outcome": "confirm", "risk_level": 3},
+            {"was_approved": 0, "action_outcome": "confirm", "risk_level": 3},
+            {"was_approved": 0, "action_outcome": "blocked", "risk_level": 4},
+        ]
+    )
     assert summary["approved"] == 1
     assert summary["denied"] == 1
     assert summary["blocked"] == 1

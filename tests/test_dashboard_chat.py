@@ -1,6 +1,7 @@
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 import dashboard.app as dashboard_app
 from assistant.events import EventBus, ResponseEvent
@@ -39,14 +40,19 @@ async def test_text_chat_pipeline_uses_existing_skill_llm_flow():
     responses = []
     bus.subscribe(ResponseEvent, lambda event: responses.append(event))
 
-    reply = await assistant.process_text_chat("hello from dashboard", speak=False, source="dashboard")
+    reply = await assistant.process_text_chat(
+        "hello from dashboard", speak=False, source="dashboard"
+    )
     await asyncio.sleep(0.05)
 
     assert reply == "Dashboard text response"
     skill_router.route.assert_awaited_once()
     llm.chat.assert_awaited_once()
     tts.speak_streaming.assert_not_called()
-    assert any(event.text == "Dashboard text response" and event.source == "dashboard" for event in responses)
+    assert any(
+        event.text == "Dashboard text response" and event.source == "dashboard"
+        for event in responses
+    )
 
 
 def test_dashboard_chat_endpoint_returns_callback_response():
@@ -54,7 +60,9 @@ def test_dashboard_chat_endpoint_returns_callback_response():
     previous_callback = dashboard_app._chat_callback
 
     try:
-        dashboard_app._chat_callback = lambda message, speak=False: f"echo:{message}|speak={speak}"
+        dashboard_app._chat_callback = lambda message, speak=False: (
+            f"echo:{message}|speak={speak}"
+        )
 
         response = client.post("/api/chat", json={"message": "hello", "speak": True})
 

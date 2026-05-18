@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-
 SERVER_PATH = Path(__file__).parent.parent / "mcp-server" / "server.py"
 
 

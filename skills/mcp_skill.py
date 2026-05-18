@@ -1,186 +1,282 @@
 """
 MCP Skill - Bridge to Model Context Protocol Servers
 """
+
+import asyncio
+import contextlib
 import logging
 import os
 import sys
-import json
-from typing import Dict, Any, List, Optional
+from typing import Any
 
 # Add project root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import MCP_SERVERS
 from assistant.skills_registry import skill
+from config import MCP_SERVERS
+from skills.base_skill import BaseSkill
 
 # Import MCP SDK
 try:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
+
     HAS_MCP = True
 except ImportError:
     HAS_MCP = False
 
 logger = logging.getLogger(__name__)
 
+
 @skill(
     name="mcp",
-    keywords=["use", "ask", "tell", "run", "search", "check"],
-    description="Executes tools from Model Context Protocol (MCP) servers like Desktop Commander or GitHub",
-    priority=10 # Much higher priority to catch specific tool requests
+    keywords=["mcp"],
+    description="Executes tools from Model Context Protocol (MCP) servers.",
+    priority=1,
 )
-class MCPSkill:
+class MCPSkill(BaseSkill):
     """
-    Connects to local MCP servers and exposes their tools to the assistant.
+    Connects to local MCP servers, maintains persistent connections,
+    and exposes their tools to the LLM native tool array.
     """
-    
+
+    _server_sessions: dict[str, dict[str, Any]] = {}
+    _server_schemas: list[dict[str, Any]] = []
+    _lock = asyncio.Lock()
+
     def __init__(self):
-        self.available_tools = {}
-        self._llm_router = None # Will be set by router if needed, or we use internal logic
+        super().__init__()
 
-    async def handle(self, text: str, context: Dict[str, Any]) -> str:
+    @classmethod
+    def _rebuild_schema_cache_locked(cls) -> None:
+        schemas: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for entry in cls._server_sessions.values():
+            for schema in entry.get("schemas", []):
+                tool_name = schema.get("function", {}).get("name", "")
+                if tool_name and tool_name not in seen:
+                    schemas.append(schema)
+                    seen.add(tool_name)
+        cls._server_schemas = schemas
+
+    @classmethod
+    async def _run_server_lifecycle(cls, server_name: str, config: dict[str, Any]):
         """
-        Handle user requests by routing to MCP tools.
+        Runs in the background indefinitely, holding the AnyIO AsyncExitStack
+        in a single continuous task scope to prevent cancel_scope errors.
         """
-        if not HAS_MCP:
-            return "MCP SDK is missing. Please run 'pip install mcp'."
-
-        # 1. Determine which server to use
-        # For now, we'll check each configured server to see if it can help
-                # In a more advanced version, we'd cache tool definitions and use LLM to pick.
-        
-                for server_name, config in MCP_SERVERS.items():            # If the user explicitly mentioned the server name, prioritize it
-            # Otherwise, we might check all servers if the request is generic
-            if server_name.lower().replace("_", " ") in text.lower() or len(MCP_SERVERS) == 1:
-                res = await self._try_execute_on_server(server_name, config, text)
-                if res:
-                    return res # Return the first successful tool execution
-        
-        # If no explicit match, try the first server (likely Desktop Commander)
-        if MCP_SERVERS:
-            server_name = list(MCP_SERVERS.keys())[0]
-            res = await self._try_execute_on_server(server_name, MCP_SERVERS[server_name], text)
-            if res:
-                return res
-
-        return "I have MCP tools configured, but I couldn't find a specific tool for that request. Try saying 'tell desktop commander to check disk'."
-
-    async def _try_execute_on_server(self, name: str, config: Dict[str, Any], text: str) -> Optional[str]:
-        """Connect to a server and try to find/execute a matching tool"""
         command = config.get("command")
         args = config.get("args", [])
         env = config.get("env", None)
-        
-        try:
-            async with stdio_client(StdioServerParameters(command=command, args=args, env=env)) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    
-                    # 1. List tools
-                    tools_result = await session.list_tools()
-                    tools = tools_result.tools
-                    
-                    if not tools:
-                        return None
-
-                    # 2. Use LLM to pick a tool and arguments
-                    # We need access to an LLM here. We'll use Ollama or Gemini if available.
-                    # Since we don't have easy access to the main LLMRouter here without passing it in,
-                    # we will try to use a fast local model via Ollama.
-                    
-                    tool_call = await self._decide_tool_call(text, tools, name)
-                    
-                    if not tool_call or tool_call.get("tool") == "none":
-                        return None
-                    
-                    tool_name = tool_call["tool"]
-                    tool_args = tool_call.get("arguments", {})
-                    
-                    print(f"   🔧 MCP [{name}] executing: {tool_name}({tool_args})")
-                    
-                    # 3. Call the tool
-                    result = await session.call_tool(tool_name, tool_args)
-                    
-                    # 4. Format the result (it's usually a list of content blocks)
-                    response_text = ""
-                    for content in result.content:
-                        if hasattr(content, "text"):
-                            response_text += content.text
-                        elif isinstance(content, dict) and "text" in content:
-                            response_text += content["text"]
-                            
-                    return response_text
-
-        except Exception as e:
-            logger.error(f"MCP Error [{name}]: {e}")
-            return f"Error communicating with {name}: {e}"
-
-    async def _decide_tool_call(self, text: str, tools: List[Any], server_name: str) -> Optional[Dict[str, Any]]:
-        """Ask LLM to pick a tool and arguments from the list"""
-        # Format tools for prompt
-        tool_defs = []
-        for t in tools:
-            tool_defs.append({
-                "name": t.name,
-                "description": t.description,
-                "inputSchema": t.inputSchema
-            })
-            
-        prompt = f"""SYSTEM: You are a tool-routing assistant for the '{server_name}' MCP server.
-Task: Pick the BEST tool from the list to handle the user's request.
-Output: You MUST respond with ONLY a raw JSON object. NO markdown, NO explanation, NO code blocks.
-
-Available Tools:
-{json.dumps(tool_defs, indent=2)}
-
-User Request: "{text}"
-
-Target JSON Format:
-{{
-  "tool": "tool_name",
-  "arguments": {{ "arg1": "val1" }}
-}}
-(If no tool matches, return {{"tool": "none"}})"""
 
         try:
-            # Try fast local inference for tool routing
-            import ollama
-            
-            # Find an available model
-            ollama_resp = ollama.list()
-            models_list = getattr(ollama_resp, 'models', ollama_resp)
-            available_models = []
-            for m in models_list:
-                if isinstance(m, dict):
-                    available_models.append(m.get('name', m.get('model', '')))
-                else:
-                    available_models.append(getattr(m, 'model', getattr(m, 'name', '')))
-            
-            # Prioritize robust models
-            best_model_base = next((m for m in ["qwen2.5", "llama3.1", "llama3.2", "mistral", "gemma", "phi3"] if any(m in am for am in available_models)), None)
-            
-            if best_model_base:
-                # Find the actual full name (e.g. llama3.2:3b)
-                best_model = next((am for am in available_models if best_model_base in am), best_model_base)
-            elif available_models:
-                best_model = available_models[0]
-            else:
-                best_model = "llama3.2"
+            async with contextlib.AsyncExitStack() as stack:
+                server_params = StdioServerParameters(
+                    command=command, args=args, env=env
+                )
+                read, write = await stack.enter_async_context(
+                    stdio_client(server_params)
+                )
 
-            response = ollama.chat(
-                model=best_model,
-                messages=[{"role": "user", "content": prompt}],
-                options={"num_predict": 256, "temperature": 0}
-            )
-            
-            raw = response["message"]["content"].strip()
-            
-            # Robust JSON extraction
-            json_start = raw.find('{')
-            json_end = raw.rfind('}')
-            if json_start != -1 and json_end != -1:
-                raw = raw[json_start:json_end+1]
-            
-            return json.loads(raw)
+                session = await stack.enter_async_context(ClientSession(read, write))
+                await session.initialize()
+
+                tools_result = await session.list_tools()
+                tools = tools_result.tools
+
+                schemas = []
+                for tool in tools:
+                    prefixed_name = f"mcp__{server_name}__{tool.name}"
+                    schemas.append(
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": prefixed_name,
+                                "description": f"[{server_name}] {tool.description}",
+                                "parameters": tool.inputSchema,
+                            },
+                        }
+                    )
+
+                async with cls._lock:
+                    entry = cls._server_sessions.setdefault(server_name, {})
+                    entry.update(
+                        {
+                            "session": session,
+                            "tools": tools,
+                            "schemas": schemas,
+                            "state": "healthy",
+                            "error": None,
+                        }
+                    )
+                    cls._rebuild_schema_cache_locked()
+
+                logger.info(
+                    f"Connected to MCP server '{server_name}' ({len(tools)} tools)"
+                )
+
+                try:
+                    while True:
+                        await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    async with cls._lock:
+                        entry = cls._server_sessions.get(server_name)
+                        if entry is not None:
+                            entry.update(
+                                {
+                                    "session": None,
+                                    "tools": [],
+                                    "schemas": [],
+                                    "state": "closed",
+                                    "error": None,
+                                }
+                            )
+                            cls._rebuild_schema_cache_locked()
+                    logger.info(f"MCP server '{server_name}' shutting down...")
+                    raise
         except Exception as e:
-            logger.error(f"Tool decision failed: {e}")
-            return None
+            async with cls._lock:
+                entry = cls._server_sessions.setdefault(server_name, {})
+                entry.update(
+                    {
+                        "session": None,
+                        "tools": [],
+                        "schemas": [],
+                        "state": "failed",
+                        "error": str(e),
+                    }
+                )
+                cls._rebuild_schema_cache_locked()
+            logger.error(f"Failed to connect to MCP server '{server_name}': {e}")
+
+    @classmethod
+    async def _wait_for_server_ready(
+        cls, server_name: str, timeout: float = 5.0
+    ) -> None:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            async with cls._lock:
+                state = cls._server_sessions.get(server_name, {}).get("state")
+                if state in {"healthy", "failed", "closed"}:
+                    return
+            await asyncio.sleep(0.05)
+
+    async def _ensure_servers(self):
+        """Spawn or refresh background tasks for all configured MCP servers."""
+        if not HAS_MCP:
+            return
+
+        async with self._lock:
+            for server_name, config in MCP_SERVERS.items():
+                entry = MCPSkill._server_sessions.get(server_name)
+                task = entry.get("task") if entry else None
+                state = entry.get("state") if entry else None
+                should_start = (
+                    entry is None
+                    or task is None
+                    or task.done()
+                    or state in {"failed", "closed"}
+                )
+                if not should_start:
+                    continue
+
+                logger.info(f"Initializing MCP connection for '{server_name}'...")
+                task = asyncio.create_task(
+                    self._run_server_lifecycle(server_name, config)
+                )
+                MCPSkill._server_sessions[server_name] = {
+                    "task": task,
+                    "session": None,
+                    "tools": [],
+                    "schemas": [],
+                    "state": "starting",
+                    "error": None,
+                }
+            MCPSkill._rebuild_schema_cache_locked()
+
+    async def get_mcp_tools(self) -> list[dict[str, Any]]:
+        """Return all MCP tools formatted as OpenAI schemas."""
+        await self._ensure_servers()
+        await asyncio.gather(
+            *(self._wait_for_server_ready(server_name) for server_name in MCP_SERVERS),
+            return_exceptions=True,
+        )
+        return list(MCPSkill._server_schemas)
+
+    async def handle_tool_call(
+        self, args: dict[str, Any], context: dict[str, Any] = None
+    ) -> Any:
+        """
+        Handle dispatch from the LLM Router.
+        args should contain '_mcp_server' and '_mcp_tool' which we parse.
+        """
+        await self._ensure_servers()
+
+        call_args = dict(args or {})
+        server_name = call_args.pop("_mcp_server", None)
+        tool_name = call_args.pop("_mcp_tool", None)
+
+        if not server_name or not tool_name:
+            return "Error: Unknown MCP server or tool routing."
+
+        if server_name not in MCP_SERVERS:
+            return f"Error: MCP server '{server_name}' is not configured."
+
+        await self._wait_for_server_ready(server_name)
+
+        async with MCPSkill._lock:
+            entry = MCPSkill._server_sessions.get(server_name)
+            if not entry:
+                return f"Error: MCP server '{server_name}' is not connected."
+
+            session = entry.get("session")
+            state = entry.get("state")
+            error = entry.get("error")
+
+        if state != "healthy" or session is None:
+            detail = error or state or "unknown state"
+            return f"Error: MCP server '{server_name}' is unavailable ({detail})."
+
+        try:
+            logger.info(f"Executing MCP tool: {server_name}.{tool_name}({call_args})")
+            result = await session.call_tool(tool_name, call_args)
+
+            response_text = ""
+            for content in result.content:
+                if hasattr(content, "text"):
+                    response_text += content.text
+                elif isinstance(content, dict) and "text" in content:
+                    response_text += content["text"]
+
+            if not response_text:
+                response_text = "Tool executed successfully (no text output)."
+
+            return response_text
+        except Exception as e:
+            logger.error(f"MCP Tool Execution Error [{server_name}.{tool_name}]: {e}")
+            return f"Error executing tool: {e}"
+
+    async def handle(self, text: str, context: dict[str, Any] = None) -> str:
+        """Fallback natural language handler if user hits the keyword directly."""
+        return "I am an MCP bridge. Please use me via native tool calls, not natural language."
+
+    @classmethod
+    async def cleanup_all(cls):
+        """Gracefully close all persistent MCP server connections to avoid AnyIO shutdown errors."""
+        async with cls._lock:
+            tasks = []
+            for server_name, data in cls._server_sessions.items():
+                try:
+                    logger.info(f"Closing MCP connection to {server_name}...")
+                    task = data.get("task")
+                    if task and not task.done():
+                        task.cancel()
+                        tasks.append(task)
+                except Exception as e:
+                    logger.error(f"Error closing MCP {server_name}: {e}")
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        async with cls._lock:
+            cls._server_sessions.clear()
+            cls._server_schemas.clear()

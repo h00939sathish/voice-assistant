@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "jarvis": {
+      "command": "python",
+      "args": ["C:\\Users\\h0093\\Documents\\new\\mcp-server\\server.py"],
+      "env": {}
+    }
+  }
+}

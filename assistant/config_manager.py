@@ -1,14 +1,16 @@
+import logging
 import os
 import sys
-import yaml
 from pathlib import Path
+
+import yaml
 from dotenv import load_dotenv
-import logging
 
 # Setup basic logging
 logger = logging.getLogger("AI_Assistant.Config")
 
 load_dotenv()
+
 
 class Config:
     """Enhanced configuration class with better error handling and validation"""
@@ -32,11 +34,11 @@ class Config:
 
     try:
         if MODEL_REGISTRY_PATH.exists():
-            with open(MODEL_REGISTRY_PATH, "r") as f:
+            with open(MODEL_REGISTRY_PATH) as f:
                 MODELS_CONFIG = yaml.safe_load(f) or {}
-                
+
         if SETTINGS_PATH.exists():
-            with open(SETTINGS_PATH, "r") as f:
+            with open(SETTINGS_PATH) as f:
                 SETTINGS_CONFIG = yaml.safe_load(f) or {}
     except ImportError:
         logger.warning("⚠️ PyYAML not installed. Using defaults.")
@@ -61,19 +63,31 @@ class Config:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
     # ================== Web Agent Configuration ==================
-    WEB_AGENT_ENABLED = bool(os.getenv("WEB_AGENT_ENABLED", "true").lower() in {"1", "true", "yes"})
+    WEB_AGENT_ENABLED = bool(
+        os.getenv("WEB_AGENT_ENABLED", "true").lower() in {"1", "true", "yes"}
+    )
     WEB_AGENT_MODE = os.getenv("WEB_AGENT_MODE", "auto")
     WEB_AGENT_BROWSER = os.getenv("WEB_AGENT_BROWSER", "chromium")
-    WEB_AGENT_HEADLESS = bool(os.getenv("WEB_AGENT_HEADLESS", "true").lower() in {"1", "true", "yes"})
-    
+    WEB_AGENT_HEADLESS = bool(
+        os.getenv("WEB_AGENT_HEADLESS", "true").lower() in {"1", "true", "yes"}
+    )
+
     # ================== System Configuration ==================
-    GAMING_MODE = bool(os.getenv("GAMING_MODE", "false").lower() in {"1", "true", "yes"})
-    
+    GAMING_MODE = bool(
+        os.getenv("GAMING_MODE", "false").lower() in {"1", "true", "yes"}
+    )
+
     # ================== Helpers ==================
     @classmethod
     def setup_directories(cls):
         """Setup required directories with error handling"""
-        directories = [cls.CACHE_DIR, cls.LOGS_DIR, cls.SKILLS_DIR, cls.BACKUPS_DIR, cls.TEMP_DIR]
+        directories = [
+            cls.CACHE_DIR,
+            cls.LOGS_DIR,
+            cls.SKILLS_DIR,
+            cls.BACKUPS_DIR,
+            cls.TEMP_DIR,
+        ]
         for directory in directories:
             try:
                 directory.mkdir(parents=True, exist_ok=True)
@@ -85,6 +99,7 @@ class Config:
         """Get system information for optimization"""
         try:
             import psutil
+
             return {
                 "cpu_count": psutil.cpu_count(),
                 "memory_total_gb": psutil.virtual_memory().total / (1024**3),
@@ -92,6 +107,7 @@ class Config:
             }
         except ImportError:
             return {}
+
 
 # Initialize
 try:

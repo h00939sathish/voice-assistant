@@ -1,9 +1,11 @@
 """
 Tests for wake word detection functionality
 """
-import pytest
+
+from unittest.mock import MagicMock
+
 import numpy as np
-from unittest.mock import patch, MagicMock
+
 from assistant.wake_word import WakeWordDetector
 
 
@@ -46,6 +48,7 @@ def test_openwakeword_processing():
 
     # Provide properly sized audio data
     audio_data = np.array([1, 2, 3, 4], dtype=np.int16)
+    assert detector._process_oww(audio_data.tobytes()) is False
     result = detector._process_oww(audio_data.tobytes())
     assert result is True
 

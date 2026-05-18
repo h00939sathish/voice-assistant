@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import logging
-import platform
-import time
 import os
+import platform
 import subprocess
-from typing import List, Optional
+import time
 
 import pyautogui
 from comtypes import CLSCTX_ALL
@@ -39,8 +38,8 @@ class AppController:
 
     def __init__(self):
         self.system = platform.system()
-        self.active_app: Optional[str] = None
-        self.active_window_handle: Optional[int] = None
+        self.active_app: str | None = None
+        self.active_window_handle: int | None = None
         try:
             devices = AudioUtilities.GetSpeakers()
             interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
@@ -113,29 +112,31 @@ class AppController:
         try:
             if not self._ensure_windows():
                 return f"{app_name} operations are Windows-only"
-            
+
             handle = self.find_window_by_title(app_name)
             if not handle:
                 return f"{app_name} window not found"
-                
+
             self.focus_window(handle)
             time.sleep(0.1)
             pyautogui.hotkey("ctrl", "f")
             time.sleep(0.3)
-            
+
             if query:
                 pyautogui.write(query, interval=0.03)
                 pyautogui.press("enter")
                 return f"Finding '{query}' on page"
             return "Opened find bar"
-            
+
         except Exception:
             logger.exception(f"{app_name} find on page failed")
             return f"Failed to find on page in {app_name}"
 
     def set_volume(self, lvl: int) -> str:
         if self.volume:
-            self.volume.SetMasterVolumeLevelScalar(max(0.0, min(1.0, lvl / 100.0)), None)
+            self.volume.SetMasterVolumeLevelScalar(
+                max(0.0, min(1.0, lvl / 100.0)), None
+            )
             return f"Volume set to {lvl}%"
         return "Volume control unavailable"
 
@@ -158,13 +159,13 @@ class AppController:
 
     def find_window_by_title(
         self, title_contains: str, retries: int = 3, delay: float = 0.6
-    ) -> Optional[int]:
+    ) -> int | None:
         """Find window handle by partial title match (Windows). Retries once to allow apps to start."""
         if not self._ensure_windows():
             return None
 
         title_contains = title_contains.lower()
-        for attempt in range(retries):
+        for _attempt in range(retries):
             found_handle = None
 
             def callback(hwnd, _):
@@ -196,12 +197,12 @@ class AppController:
             # 1. Force restore if minimized
             if win32gui.IsIconic(handle):
                 win32gui.ShowWindow(handle, win32con.SW_RESTORE)
-            
+
             # 2. Key-press trick to allow background focus stealing
             # Windows blocks SetForegroundWindow unless the calling process has input focus
             # Pro-tip: Pressing 'Alt' sometimes bypasses this restriction
-            pyautogui.press('alt', interval=0.01) 
-            
+            pyautogui.press("alt", interval=0.01)
+
             # 3. Try standard SetForegroundWindow
             try:
                 win32gui.SetForegroundWindow(handle)
@@ -209,14 +210,14 @@ class AppController:
                 # If that fails, try ShowWindow
                 win32gui.ShowWindow(handle, win32con.SW_SHOW)
                 win32gui.SetForegroundWindow(handle)
-            
+
             time.sleep(0.25)
-            
+
             # 4. Verify it worked
             active_window = win32gui.GetForegroundWindow()
             if active_window == handle:
                 return True
-                
+
             # 5. Retry loop
             for _ in range(3):
                 win32gui.ShowWindow(handle, win32con.SW_SHOWMAXIMIZED)
@@ -224,12 +225,11 @@ class AppController:
                 time.sleep(0.2)
                 if win32gui.GetForegroundWindow() == handle:
                     return True
-            
+
             return False
-            
+
         except Exception:
             logger.exception("Failed to focus window")
-            return False
             return False
 
     def is_app_running(self, app_name: str) -> bool:
@@ -260,7 +260,7 @@ class AppController:
     def launch_app(self, app_name: str) -> str:
         """Launch an application using App Scanner."""
         logger.info(f"Attempting to launch: {app_name}")
-        
+
         # 1. Check App Scanner
         match = self.app_scanner.find_best_match(app_name)
         if match:
@@ -279,7 +279,7 @@ class AppController:
             except Exception as e:
                 logger.error(f"Failed to launch {match}: {e}")
                 return f"Failed to launch {match}"
-        
+
         return f"I couldn't find an app named '{app_name}'"
 
     # ==================== Spotify Controls ====================
@@ -319,48 +319,50 @@ class AppController:
         try:
             if not self._ensure_windows():
                 return "Spotify search available on Windows only"
-            
+
             # Find and focus window
             handle = self.find_window_by_title("spotify")
             if not handle:
                 return "Spotify window not found"
-            
+
             # Bringing window to front - aggressive check
             if not self.focus_window(handle):
-                 logger.error("Could not force focus to Spotify. Aborting search to prevent typing in wrong window.")
-                 return "Could not focus Spotify window."
+                logger.error(
+                    "Could not force focus to Spotify. Aborting search to prevent typing in wrong window."
+                )
+                return "Could not focus Spotify window."
 
             # Double check we are ACTUALLY in focused window
             if win32gui.GetForegroundWindow() != handle:
-                 return "Spotify failed to take focus."
+                return "Spotify failed to take focus."
 
             # Open search (Ctrl+L)
             pyautogui.hotkey("ctrl", "l")
             time.sleep(0.2)
-            
+
             # Clear text
             pyautogui.hotkey("ctrl", "a")
             time.sleep(0.05)
             pyautogui.press("backspace")
-            
+
             # Type slowly
             pyautogui.write(query, interval=0.05)
             time.sleep(0.5)
             pyautogui.press("enter")
-            
+
             # Wait for search results - Spotify can be slow
             time.sleep(2.5)
-            
+
             # Navigate to "Top Result"
             # Sequence: Tab -> Tab -> Tab -> Enter
-            pyautogui.press("tab") 
+            pyautogui.press("tab")
             time.sleep(0.1)
-            pyautogui.press("tab") # to All
+            pyautogui.press("tab")  # to All
             time.sleep(0.1)
-            pyautogui.press("tab") # to Top Result
+            pyautogui.press("tab")  # to Top Result
             time.sleep(0.1)
-            pyautogui.press("enter") # Play
-            
+            pyautogui.press("enter")  # Play
+
             return f"Playing '{query}' on Spotify"
         except Exception:
             logger.exception("Spotify search failed")
@@ -420,7 +422,6 @@ class AppController:
                 return "Chrome window not found"
             self.focus_window(handle)
             pyautogui.hotkey("ctrl", "l")
-            time.sleep(0.15)
             pyautogui.write(query, interval=0.03)
             pyautogui.press("enter")
             return f"Searching for '{query}'"
@@ -469,7 +470,6 @@ class AppController:
                 return "Edge window not found"
             self.focus_window(handle)
             pyautogui.hotkey("ctrl", "l")
-            time.sleep(0.15)
             pyautogui.write(query, interval=0.03)
             pyautogui.press("enter")
             return f"Searching for '{query}' in Edge"
@@ -518,7 +518,6 @@ class AppController:
                 return "Brave window not found"
             self.focus_window(handle)
             pyautogui.hotkey("ctrl", "l")
-            time.sleep(0.15)
             pyautogui.write(query, interval=0.03)
             pyautogui.press("enter")
             return f"Searching for '{query}' in Brave"
@@ -567,7 +566,6 @@ class AppController:
                 return "Opera window not found"
             self.focus_window(handle)
             pyautogui.hotkey("ctrl", "l")
-            time.sleep(0.15)
             pyautogui.write(query, interval=0.03)
             pyautogui.press("enter")
             return f"Searching for '{query}' in Opera"
@@ -724,10 +722,10 @@ class AppController:
             logger.exception("Command execution failed: %s", e)
             return f"Error executing command: {e}"
 
-    def list_supported_apps(self) -> List[str]:
+    def list_supported_apps(self) -> list[str]:
         return list(self.app_commands.keys())
 
-    def list_app_commands(self, app_name: str) -> List[str]:
+    def list_app_commands(self, app_name: str) -> list[str]:
         app_name = app_name.lower()
         if app_name in self.app_commands:
             return list(self.app_commands[app_name].keys())

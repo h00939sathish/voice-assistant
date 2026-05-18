@@ -2,12 +2,13 @@
 System Tray Icon - Background management
 """
 
-import pystray
-from PIL import Image, ImageDraw
-import sys
 import os
+import sys
 import winreg
 from pathlib import Path
+
+import pystray
+from PIL import Image, ImageDraw
 
 
 def get_script_path():
@@ -26,7 +27,7 @@ def is_in_startup():
         except FileNotFoundError:
             winreg.CloseKey(key)
             return False
-    except:
+    except Exception:
         return False
 
 
@@ -41,7 +42,7 @@ def toggle_startup():
         if is_in_startup():
             try:
                 winreg.DeleteValue(key, value_name)
-            except:
+            except Exception:
                 pass
         else:
             winreg.SetValueEx(key, value_name, 0, winreg.REG_SZ, value)

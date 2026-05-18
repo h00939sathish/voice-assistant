@@ -15,10 +15,9 @@ Displays:
 import json
 import logging
 import sys
-import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,7 @@ class OperatorDashboard:
     The GUI is optional — import errors are handled gracefully.
     """
 
-    def __init__(self, data_dir: Optional[Path] = None):
+    def __init__(self, data_dir: Path | None = None):
         if data_dir is None:
             data_dir = Path(__file__).parent.parent / "data"
         self._data_dir = data_dir
@@ -47,33 +46,38 @@ class OperatorDashboard:
     # Data accessors (pure readers — no module imports)
     # ------------------------------------------------------------------
 
-    def get_recent_actions(self, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_recent_actions(self, limit: int = 20) -> list[dict[str, Any]]:
         """Read the last N tool executions from the execution log."""
         return self._read_jsonl(self._exec_log_path, limit)
 
-    def get_recent_events(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_recent_events(self, limit: int = 50) -> list[dict[str, Any]]:
         """Read the last N events from the event stream."""
         return self._read_jsonl(self._events_path, limit)
 
-    def get_task_state(self) -> Optional[Dict[str, Any]]:
+    def get_task_state(self) -> dict[str, Any] | None:
         """Read current task executor state."""
         if not self._task_state_path.exists():
             return None
         try:
-            with open(self._task_state_path, "r", encoding="utf-8") as f:
+            with open(self._task_state_path, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return None
 
-    def get_subsystem_health(self) -> Dict[str, str]:
+    def get_subsystem_health(self) -> dict[str, str]:
         """
         Derive subsystem health from recent events.
         Returns a dict like {"llm": "healthy", "mcp": "degraded", ...}
         """
         default_subsystems = {
-            "mic": "unknown", "wake_word": "unknown", "stt": "unknown",
-            "tts": "unknown", "llm": "unknown", "mcp": "unknown",
-            "memory": "unknown", "scheduler": "unknown",
+            "mic": "unknown",
+            "wake_word": "unknown",
+            "stt": "unknown",
+            "tts": "unknown",
+            "llm": "unknown",
+            "mcp": "unknown",
+            "memory": "unknown",
+            "scheduler": "unknown",
         }
         events = self.get_recent_events(100)
         for event in reversed(events):
@@ -83,29 +87,41 @@ class OperatorDashboard:
                     default_subsystems[sub] = event.get("state", "unknown")
         return default_subsystems
 
-    def get_tool_failure_history(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_tool_failure_history(self, limit: int = 10) -> list[dict[str, Any]]:
         """Get recent tool failures from the event stream."""
         events = self.get_recent_events(200)
         failures = [
-            e for e in events
+            e
+            for e in events
             if e.get("type") in ("ToolFailedEvent",)
-            or (e.get("type") == "StatusEvent" and "failed" in e.get("text", "").lower())
+            or (
+                e.get("type") == "StatusEvent" and "failed" in e.get("text", "").lower()
+            )
         ]
         return failures[-limit:]
 
-    def get_api_stats(self) -> Dict[str, Any]:
+    def get_api_stats(self) -> dict[str, Any]:
         """Compute basic API usage stats from the execution log."""
         actions = self._read_jsonl(self._exec_log_path, 500)
         if not actions:
-            return {"total_calls": 0, "by_tool": {}, "avg_latency_ms": 0, "failure_rate": 0.0}
+            return {
+                "total_calls": 0,
+                "by_tool": {},
+                "avg_latency_ms": 0,
+                "failure_rate": 0.0,
+            }
 
-    def _safe_parse_datetime(self, ts_str: str) -> Optional[datetime]:
+    def _safe_parse_datetime(self, ts_str: str) -> datetime | None:
         """Safely parse datetime string."""
         try:
             if not ts_str:
                 return None
             # Handle various timestamp formats
-            for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            for fmt in (
+                "%Y-%m-%dT%H:%M:%S.%f",
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%d %H:%M:%S",
+            ):
                 try:
                     return datetime.strptime(ts_str[:19], fmt)
                 except ValueError:
@@ -114,32 +130,35 @@ class OperatorDashboard:
         except (ValueError, TypeError, OSError):
             return None
 
-    def get_session_summary(self, days: int = 1) -> Dict[str, Any]:
+    def get_session_summary(self, days: int = 1) -> dict[str, Any]:
         """Get session usage summary for the last N days."""
         from datetime import timedelta
+
         cutoff = datetime.now() - timedelta(days=days)
-        
+
         events = self.get_recent_events(2000)
         recent = [
-            e for e in events
-            if self._safe_parse_datetime(e.get("timestamp")) and self._safe_parse_datetime(e.get("timestamp")) > cutoff
+            e
+            for e in events
+            if self._safe_parse_datetime(e.get("timestamp"))
+            and self._safe_parse_datetime(e.get("timestamp")) > cutoff
         ]
-        
+
         # Count by event type
-        event_counts: Dict[str, int] = {}
+        event_counts: dict[str, int] = {}
         for e in recent:
             t = e.get("type", "unknown")
             event_counts[t] = event_counts.get(t, 0) + 1
-        
+
         # System state changes
         state_changes = [e for e in recent if e.get("type") == "StateChangeEvent"]
-        
+
         # Skills used
         skills_used = len([e for e in recent if e.get("action") == "skill_used"])
-        
+
         # Errors
         errors = len([e for e in recent if e.get("type") == "ErrorEvent"])
-        
+
         return {
             "period_days": days,
             "event_count": len(recent),
@@ -149,25 +168,27 @@ class OperatorDashboard:
             "errors": errors,
         }
 
-    def get_skill_usage_stats(self, days: int = 7) -> Dict[str, Any]:
+    def get_skill_usage_stats(self, days: int = 7) -> dict[str, Any]:
         """Get skill usage statistics for the last N days."""
         from datetime import timedelta
+
         cutoff = datetime.now() - timedelta(days=days)
-        
+
         events = self.get_recent_events(1000)
         skill_events = [
-            e for e in events
-            if e.get("type") == "UsageEvent" 
+            e
+            for e in events
+            if e.get("type") == "UsageEvent"
             and e.get("action") == "skill_used"
             and self._safe_parse_datetime(e.get("timestamp"))
             and self._safe_parse_datetime(e.get("timestamp")) > cutoff
         ]
-        
-        by_skill: Dict[str, int] = {}
+
+        by_skill: dict[str, int] = {}
         for e in skill_events:
             skill = e.get("name", "unknown")
             by_skill[skill] = by_skill.get(skill, 0) + 1
-        
+
         return {
             "period_days": days,
             "total_skill_uses": len(skill_events),
@@ -175,26 +196,30 @@ class OperatorDashboard:
             "top_skill": max(by_skill, key=by_skill.get) if by_skill else None,
         }
 
-    def get_llm_latency_stats(self, days: int = 7) -> Dict[str, Any]:
+    def get_llm_latency_stats(self, days: int = 7) -> dict[str, Any]:
         """Get LLM response latency statistics."""
         from datetime import timedelta
+
         cutoff = datetime.now() - timedelta(days=days)
-        
+
         events = self.get_recent_events(500)
         latency_events = [
-            e for e in events
+            e
+            for e in events
             if e.get("type") == "UsageEvent"
             and e.get("action") == "llm_call"
             and self._safe_parse_datetime(e.get("timestamp"))
             and self._safe_parse_datetime(e.get("timestamp")) > cutoff
         ]
-        
+
         if not latency_events:
             return {"period_days": days, "total_calls": 0, "avg_latency_ms": 0}
-        
-        latencies = [e.get("duration_ms", 0) for e in latency_events if e.get("duration_ms")]
+
+        latencies = [
+            e.get("duration_ms", 0) for e in latency_events if e.get("duration_ms")
+        ]
         avg_ms = sum(latencies) / len(latencies) if latencies else 0
-        
+
         return {
             "period_days": days,
             "total_calls": len(latency_events),
@@ -203,8 +228,11 @@ class OperatorDashboard:
             "max_latency_ms": max(latencies) if latencies else 0,
         }
 
+    def get_tool_usage_stats(self, days: int = 7) -> dict[str, Any]:
+        """Get tool usage statistics."""
+        actions = self.get_recent_actions(500)
         total = len(actions)
-        by_tool: Dict[str, int] = {}
+        by_tool: dict[str, int] = {}
         total_duration = 0
         failures = 0
 
@@ -223,12 +251,13 @@ class OperatorDashboard:
             "slowest_tools": self._get_slowest_tools(actions),
         }
 
-    def get_authority_audit(self, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_authority_audit(self, limit: int = 20) -> list[dict[str, Any]]:
         """Read recent authority gate audit entries."""
         if not self._audit_db_path.exists():
             return []
         try:
             import sqlite3
+
             conn = sqlite3.connect(str(self._audit_db_path))
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
@@ -241,7 +270,7 @@ class OperatorDashboard:
         except Exception:
             return []
 
-    def get_full_status(self) -> Dict[str, Any]:
+    def get_full_status(self) -> dict[str, Any]:
         """Aggregate all dashboard data into a single status report."""
         return {
             "timestamp": datetime.now().isoformat(),
@@ -288,7 +317,7 @@ class OperatorDashboard:
         # Session summary
         session = status.get("session_summary", {})
         if session.get("event_count"):
-            print(f"\n📈 Session (last 24h):")
+            print("\n📈 Session (last 24h):")
             print(f"  Events: {session['event_count']}")
             print(f"  Skills used: {session['skills_used']}")
             print(f"  Errors: {session['errors']}")
@@ -296,36 +325,51 @@ class OperatorDashboard:
         # LLM latency
         llm = status.get("llm_latency", {})
         if llm.get("total_calls"):
-            print(f"\n⚡ LLM Latency:")
+            print("\n⚡ LLM Latency:")
             print(f"  Calls: {llm['total_calls']}")
             print(f"  Avg: {llm['avg_latency_ms']}ms")
-            print(f"  Range: {llm.get('min_latency_ms', 0)}-{llm.get('max_latency_ms', 0)}ms")
+            print(
+                f"  Range: {llm.get('min_latency_ms', 0)}-{llm.get('max_latency_ms', 0)}ms"
+            )
 
         # Recent actions
         print(f"\n🔧 Recent Actions (last {len(status['recent_actions'])}):")
         for action in status["recent_actions"]:
-            status_icon = {"ok": "✅", "error": "❌", "retryable": "🔄",
-                          "requires_confirmation": "⚠️", "blocked": "🛡️"}.get(
-                action.get("status", ""), "❓")
-            print(f"  {status_icon} {action.get('tool_name', '?'):20s} "
-                  f"{action.get('duration_ms', 0):5d}ms  {action.get('result_summary', '')[:40]}")
+            status_icon = {
+                "ok": "✅",
+                "error": "❌",
+                "retryable": "🔄",
+                "requires_confirmation": "⚠️",
+                "blocked": "🛡️",
+            }.get(action.get("status", ""), "❓")
+            print(
+                f"  {status_icon} {action.get('tool_name', '?'):20s} "
+                f"{action.get('duration_ms', 0):5d}ms  {action.get('result_summary', '')[:40]}"
+            )
 
         # API stats
         stats = status["api_stats"]
         if stats["total_calls"]:
-            print(f"\n📊 API Stats:")
+            print("\n📊 API Stats:")
             print(f"  Total calls: {stats['total_calls']}")
             print(f"  Avg latency: {stats['avg_latency_ms']}ms")
-            print(f"  Failure rate: {stats['failure_rate']*100:.1f}%")
+            print(f"  Failure rate: {stats['failure_rate'] * 100:.1f}%")
 
         # Active tasks
         task_data = status["task_state"]
         if task_data and task_data.get("tasks"):
-            print(f"\n📋 Active Tasks:")
+            print("\n📋 Active Tasks:")
             for tid, t in task_data["tasks"].items():
-                state_icon = {"running": "🏃", "paused": "⏸️", "completed": "✅",
-                             "failed": "❌", "pending": "⏳"}.get(t.get("state", ""), "❓")
-                print(f"  {state_icon} [{tid}] {t.get('goal', '')[:40]} ({t.get('state', '')})")
+                state_icon = {
+                    "running": "🏃",
+                    "paused": "⏸️",
+                    "completed": "✅",
+                    "failed": "❌",
+                    "pending": "⏳",
+                }.get(t.get("state", ""), "❓")
+                print(
+                    f"  {state_icon} [{tid}] {t.get('goal', '')[:40]} ({t.get('state', '')})"
+                )
 
         print("\n" + "=" * 60)
 
@@ -333,11 +377,11 @@ class OperatorDashboard:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _read_jsonl(self, path: Path, limit: int) -> List[Dict[str, Any]]:
+    def _read_jsonl(self, path: Path, limit: int) -> list[dict[str, Any]]:
         if not path.exists():
             return []
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 lines = f.readlines()
             entries = []
             for line in lines[-limit:]:
@@ -349,9 +393,11 @@ class OperatorDashboard:
             return []
 
     @staticmethod
-    def _get_slowest_tools(actions: List[Dict], top_n: int = 5) -> List[Dict[str, Any]]:
+    def _get_slowest_tools(actions: list[dict], top_n: int = 5) -> list[dict[str, Any]]:
         """Find the slowest tool calls."""
-        sorted_actions = sorted(actions, key=lambda a: a.get("duration_ms", 0), reverse=True)
+        sorted_actions = sorted(
+            actions, key=lambda a: a.get("duration_ms", 0), reverse=True
+        )
         return [
             {"tool_name": a.get("tool_name"), "duration_ms": a.get("duration_ms", 0)}
             for a in sorted_actions[:top_n]

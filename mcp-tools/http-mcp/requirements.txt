@@ -1,0 +1,2 @@
+# HTTP API MCP — No external dependencies
+mcp>=1.0.0

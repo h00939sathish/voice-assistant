@@ -14,18 +14,44 @@ logger = logging.getLogger("AI_Assistant.AppIntegrationSkill")
 @skill(
     name="app_integration",
     keywords=[
-        "open spotify", "open chrome", "open edge", "open brave", "open opera",
-        "open discord", "open whatsapp", "open notepad", "open vscode",
-        "play on spotify", "play spotify", "pause spotify", "next song", "skip song",
-        "previous song", "volume spotify",
-        "search chrome", "search edge", "search brave", "search opera",
-        "send discord", "message discord", "mute discord",
-        "send whatsapp", "message whatsapp",
-        "spotify", "chrome", "edge", "brave", "opera", "discord", "whatsapp",
-        "notepad", "vscode", "visual studio code",
+        "open spotify",
+        "open chrome",
+        "open edge",
+        "open brave",
+        "open opera",
+        "open discord",
+        "open whatsapp",
+        "open notepad",
+        "open vscode",
+        "play on spotify",
+        "play spotify",
+        "pause spotify",
+        "next song",
+        "skip song",
+        "previous song",
+        "volume spotify",
+        "search chrome",
+        "search edge",
+        "search brave",
+        "search opera",
+        "send discord",
+        "message discord",
+        "mute discord",
+        "send whatsapp",
+        "message whatsapp",
+        "spotify",
+        "chrome",
+        "edge",
+        "brave",
+        "opera",
+        "discord",
+        "whatsapp",
+        "notepad",
+        "vscode",
+        "visual studio code",
     ],
     description="Open apps and control them: Spotify, Chrome, Edge, Brave, Discord, WhatsApp, Notepad, VS Code",
-    priority=10
+    priority=10,
 )
 class Skill(BaseSkill):
     """
@@ -43,13 +69,14 @@ class Skill(BaseSkill):
         Standard skill entry point.
         """
         if isinstance(context, dict):
-            self.assistant = context.get('assistant')
+            self.assistant = context.get("assistant")
         return await self.on_command(text, context if isinstance(context, dict) else {})
 
     def _get_controller(self):
         if not self._controller_loaded:
             try:
                 from assistant.app_controller import AppController
+
                 self.controller = AppController()
                 self._controller_loaded = True
             except Exception as e:
@@ -87,7 +114,9 @@ class Skill(BaseSkill):
         return None
 
     # -------------------- Async helpers --------------------
-    async def _open_and_execute(self, app_name: str, action: str, context: dict[str, Any]) -> str:
+    async def _open_and_execute(
+        self, app_name: str, action: str, context: dict[str, Any]
+    ) -> str:
         """
         Open application (via assistant's open_app) and then execute action via controller.
         Both operations are executed in threads if blocking.
@@ -100,7 +129,9 @@ class Skill(BaseSkill):
             # Check if app is already running — if so, just focus it
             is_running = await asyncio.to_thread(controller.is_app_running, app_name)
             if is_running:
-                handle = await asyncio.to_thread(controller.find_window_by_title, app_name)
+                handle = await asyncio.to_thread(
+                    controller.find_window_by_title, app_name
+                )
                 if handle:
                     await asyncio.to_thread(controller.focus_window, handle)
                     return f"{app_name.title()} is already open and now in focus."
@@ -113,7 +144,9 @@ class Skill(BaseSkill):
             # controller already loaded above
 
             # execute controller command in thread (controller is synchronous)
-            return await asyncio.to_thread(self._execute_action, app_name, action, controller)
+            return await asyncio.to_thread(
+                self._execute_action, app_name, action, controller
+            )
 
         except Exception as e:
             logger.exception("Error in _open_and_execute: %s", e)
@@ -134,7 +167,9 @@ class Skill(BaseSkill):
                         query = re.sub(r"\s+on\s+spotify['.]?$", "", query, flags=re.I)
                         query = query.strip(" .")
                         if query:
-                            return controller.execute_command("spotify", "search", query=query)
+                            return controller.execute_command(
+                                "spotify", "search", query=query
+                            )
                     return controller.execute_command("spotify", "play")
                 if "pause" in action:
                     return controller.execute_command("spotify", "pause")
@@ -153,7 +188,9 @@ class Skill(BaseSkill):
                     m = re.search(r"(?:search|google)\s+(?:for\s+)?(.+)", action)
                     if m:
                         query = m.group(1).strip()
-                        return controller.execute_command("chrome", "search", query=query)
+                        return controller.execute_command(
+                            "chrome", "search", query=query
+                        )
                 if "go to" in action or "open" in action:
                     m = re.search(r"(?:go to|open)\s+(.+)", action)
                     if m:
@@ -170,16 +207,21 @@ class Skill(BaseSkill):
                             from assistant.youtube_music_controller import (
                                 get_ytm_controller,
                             )
+
                             ytm = get_ytm_controller()
                             url = ytm.get_song_url(query)
                             if url:
-                                return controller.execute_command("chrome", "go_to", url=url)
+                                return controller.execute_command(
+                                    "chrome", "go_to", url=url
+                                )
                             return f"Could not find '{query}' on YouTube Music"
                         except ImportError:
                             pass
 
                     # Fallback to generic search
-                    return controller.execute_command("chrome", "go_to", url="https://music.youtube.com")
+                    return controller.execute_command(
+                        "chrome", "go_to", url="https://music.youtube.com"
+                    )
 
                 if "new tab" in action:
                     return controller.execute_command("chrome", "new_tab")
@@ -188,7 +230,9 @@ class Skill(BaseSkill):
                 if "find" in action and "on page" in action:
                     m = re.search(r"find\s+(.+?)\s+on\s+page", action)
                     query = m.group(1).strip() if m else ""
-                    return controller.execute_command("chrome", "find_on_page", query=query)
+                    return controller.execute_command(
+                        "chrome", "find_on_page", query=query
+                    )
 
             # Notepad
             if "notepad" in app_name.lower():
@@ -200,7 +244,9 @@ class Skill(BaseSkill):
                 if "save" in action:
                     m = re.search(r"save\s+(?:as\s+)?(.+)", action)
                     filename = m.group(1).strip() if m else "document.txt"
-                    return controller.execute_command("notepad", "save", filename=filename)
+                    return controller.execute_command(
+                        "notepad", "save", filename=filename
+                    )
 
             # VS Code
             if "vscode" in app_name.lower() or "visual studio" in app_name.lower():
@@ -249,8 +295,10 @@ class Skill(BaseSkill):
         """Handle Spotify commands - uses API for background control, falls back to keyboard"""
         # Try Spotify API first (all blocking I/O runs in thread)
         try:
+
             def _try_api():
                 from assistant.spotify_controller import get_spotify_controller
+
                 spotify_api = get_spotify_controller()
                 if spotify_api.is_available:
                     return self._handle_spotify_api(cmd, spotify_api)
@@ -263,7 +311,9 @@ class Skill(BaseSkill):
             pass  # Fall through to keyboard control
         except RuntimeError as e:
             if "PREMIUM_REQUIRED" in str(e):
-                logger.info("Spotify Premium not available, switching to keyboard automation")
+                logger.info(
+                    "Spotify Premium not available, switching to keyboard automation"
+                )
             else:
                 logger.warning(f"Spotify API failed, falling back to keyboard: {e}")
         except Exception as e:
@@ -287,7 +337,9 @@ class Skill(BaseSkill):
 
         if "play" in cmd:
             # Extract song/artist name
-            m = re.search(r"play\s+(?:music\s+)?(?:search\s+)?(?:for\s+)?(.+)", cmd, re.I)
+            m = re.search(
+                r"play\s+(?:music\s+)?(?:search\s+)?(?:for\s+)?(.+)", cmd, re.I
+            )
             if m:
                 query = m.group(1).strip()
                 query = re.sub(r"\s+on\s+spotify['.]*$", "", query, flags=re.I)
@@ -322,18 +374,21 @@ class Skill(BaseSkill):
         try:
             if "open" in cmd and "spotify" in cmd and "play" not in cmd:
                 return SkillResponse.with_followup(
-                    "Opened Spotify. What would you like to play?",
-                    timeout=8.0
+                    "Opened Spotify. What would you like to play?", timeout=8.0
                 )
 
             if "play" in cmd:
-                m = re.search(r"play\s+(?:music\s+)?(?:search\s+)?(?:for\s+)?(.+)", cmd, re.I)
+                m = re.search(
+                    r"play\s+(?:music\s+)?(?:search\s+)?(?:for\s+)?(.+)", cmd, re.I
+                )
                 if m:
                     query = m.group(1).strip()
                     query = re.sub(r"\s+on\s+spotify\.?$", "", query, flags=re.I)
                     query = query.strip(" .")
                     if query:
-                        return controller.execute_command("spotify", "search", query=query)
+                        return controller.execute_command(
+                            "spotify", "search", query=query
+                        )
                 return controller.execute_command("spotify", "play")
             if "pause" in cmd:
                 return controller.execute_command("spotify", "pause")
@@ -350,7 +405,6 @@ class Skill(BaseSkill):
             return "Spotify action failed."
         return "I couldn't interpret that Spotify command."
 
-
     async def _handle_chrome_async(self, cmd: str) -> str:
         ctr = self._get_controller()
         if not ctr:
@@ -362,10 +416,14 @@ class Skill(BaseSkill):
 
     def _handle_chrome_sync(self, cmd: str, controller) -> str:
         try:
-            if "open" in cmd and ("chrome" in cmd or "browser" in cmd) and "search" not in cmd and "go to" not in cmd:
+            if (
+                "open" in cmd
+                and ("chrome" in cmd or "browser" in cmd)
+                and "search" not in cmd
+                and "go to" not in cmd
+            ):
                 return SkillResponse.with_followup(
-                    "Opened Chrome. What would you like to search?",
-                    timeout=8.0
+                    "Opened Chrome. What would you like to search?", timeout=8.0
                 )
 
             if "search" in cmd or "google" in cmd:
@@ -397,10 +455,14 @@ class Skill(BaseSkill):
 
     def _handle_edge_sync(self, cmd: str, controller) -> str:
         try:
-            if "open" in cmd and "edge" in cmd and "search" not in cmd and "go to" not in cmd:
+            if (
+                "open" in cmd
+                and "edge" in cmd
+                and "search" not in cmd
+                and "go to" not in cmd
+            ):
                 return SkillResponse.with_followup(
-                    "Opened Microsoft Edge. What would you like to search?",
-                    timeout=8.0
+                    "Opened Microsoft Edge. What would you like to search?", timeout=8.0
                 )
 
             if "search" in cmd or "google" in cmd:
@@ -432,10 +494,14 @@ class Skill(BaseSkill):
 
     def _handle_brave_sync(self, cmd: str, controller) -> str:
         try:
-            if "open" in cmd and "brave" in cmd and "search" not in cmd and "go to" not in cmd:
+            if (
+                "open" in cmd
+                and "brave" in cmd
+                and "search" not in cmd
+                and "go to" not in cmd
+            ):
                 return SkillResponse.with_followup(
-                    "Opened Brave browser. What would you like to search?",
-                    timeout=8.0
+                    "Opened Brave browser. What would you like to search?", timeout=8.0
                 )
 
             if "search" in cmd or "google" in cmd:
@@ -467,10 +533,14 @@ class Skill(BaseSkill):
 
     def _handle_opera_sync(self, cmd: str, controller) -> str:
         try:
-            if "open" in cmd and "opera" in cmd and "search" not in cmd and "go to" not in cmd:
+            if (
+                "open" in cmd
+                and "opera" in cmd
+                and "search" not in cmd
+                and "go to" not in cmd
+            ):
                 return SkillResponse.with_followup(
-                    "Opened Opera browser. What would you like to search?",
-                    timeout=8.0
+                    "Opened Opera browser. What would you like to search?", timeout=8.0
                 )
 
             if "search" in cmd or "google" in cmd:
@@ -502,10 +572,14 @@ class Skill(BaseSkill):
 
     def _handle_discord_sync(self, cmd: str, controller) -> str:
         try:
-            if "open" in cmd and "discord" in cmd and "send" not in cmd and "message" not in cmd:
+            if (
+                "open" in cmd
+                and "discord" in cmd
+                and "send" not in cmd
+                and "message" not in cmd
+            ):
                 return SkillResponse.with_followup(
-                    "Opened Discord. What would you like me to do?",
-                    timeout=8.0
+                    "Opened Discord. What would you like me to do?", timeout=8.0
                 )
 
             if "mute" in cmd:
@@ -514,7 +588,9 @@ class Skill(BaseSkill):
                 m = re.search(r"(?:send|message)\s+(.+?)(?:\s+on discord)?$", cmd, re.I)
                 if m:
                     message = m.group(1).strip()
-                    return controller.execute_command("discord", "send_message", message=message)
+                    return controller.execute_command(
+                        "discord", "send_message", message=message
+                    )
         except Exception as e:
             logger.exception("Discord handler failed: %s", e)
             return "Discord action failed."
@@ -531,23 +607,33 @@ class Skill(BaseSkill):
 
     def _handle_whatsapp_sync(self, cmd: str, controller) -> str:
         try:
-            if "open" in cmd and "whatsapp" in cmd and "send" not in cmd and "message" not in cmd:
+            if (
+                "open" in cmd
+                and "whatsapp" in cmd
+                and "send" not in cmd
+                and "message" not in cmd
+            ):
                 return SkillResponse.with_followup(
-                    "Opened WhatsApp. Who would you like to message?",
-                    timeout=10.0
+                    "Opened WhatsApp. Who would you like to message?", timeout=10.0
                 )
 
             if "send" in cmd or "message" in cmd:
                 m = re.search(
-                    r"(?:send|message)\s+(.+?)(?:\s+to\s+(.+?))?(?:\s+on whatsapp)?$", cmd, re.I
+                    r"(?:send|message)\s+(.+?)(?:\s+to\s+(.+?))?(?:\s+on whatsapp)?$",
+                    cmd,
+                    re.I,
                 )
                 if m:
                     message = m.group(1).strip()
                     contact = m.group(2).strip() if m.group(2) else None
                     if contact:
-                        controller.execute_command("whatsapp", "search_contact", contact=contact)
+                        controller.execute_command(
+                            "whatsapp", "search_contact", contact=contact
+                        )
                         time.sleep(0.5)
-                    return controller.execute_command("whatsapp", "send_message", message=message)
+                    return controller.execute_command(
+                        "whatsapp", "send_message", message=message
+                    )
         except Exception as e:
             logger.exception("WhatsApp handler failed: %s", e)
             return "WhatsApp action failed."

@@ -1,0 +1,2 @@
+# Browser Research MCP — No external dependencies
+mcp>=1.0.0

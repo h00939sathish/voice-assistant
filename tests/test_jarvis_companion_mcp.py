@@ -1,8 +1,7 @@
-import json
 import importlib.util
-from pathlib import Path
+import json
 import urllib.error
-
+from pathlib import Path
 
 SERVER_PATH = Path(__file__).parent.parent / "mcp-server" / "jarvis_companion_mcp.py"
 
@@ -75,9 +74,7 @@ def test_jarvis_click_to_talk_autostarts_jarvis_then_retries(monkeypatch):
             return False
 
         def read(self):
-            return json.dumps({"accepted": True, "state": "LISTENING"}).encode(
-                "utf-8"
-            )
+            return json.dumps({"accepted": True, "state": "LISTENING"}).encode("utf-8")
 
     def fake_urlopen(request, timeout):
         calls.append(request.full_url)

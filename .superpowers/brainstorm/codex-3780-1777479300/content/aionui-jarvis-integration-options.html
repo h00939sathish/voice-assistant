@@ -1,0 +1,80 @@
+<h2>How should AionUi connect to Jarvis?</h2>
+<p class="subtitle">Three practical shapes for using AionUi as the face, voice entry point, and mascot layer while preserving the existing Jarvis assistant core.</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">A. AionUi as remote control</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center">
+            <div class="placeholder">AionUi chat + pet</div>
+            <div style="font-size:28px">→</div>
+            <div class="placeholder">Jarvis API<br>chat / speak / state</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>API Bridge</h3>
+      <p>AionUi sends text commands to Jarvis over HTTP/WebSocket. Jarvis keeps wake word, tools, memory, TTS, and safety gates.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">B. AionUi as visual companion</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center">
+            <div class="placeholder">Jarvis voice loop<br>mic / STT / TTS</div>
+            <div style="font-size:28px">↔</div>
+            <div class="placeholder">AionUi pet<br>listening / thinking / speaking</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Pet Companion</h3>
+      <p>Jarvis remains the main interface. AionUi pet mirrors assistant state, expressions, notifications, and quick actions.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C. AionUi as primary desktop shell</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center">
+            <div class="placeholder">AionUi voice/chat/pet</div>
+            <div style="font-size:28px">→</div>
+            <div class="placeholder">Jarvis tools<br>skills / memory / agents</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Frontend Swap</h3>
+      <p>AionUi becomes the main user surface. Jarvis is treated mostly as a backend/tool runtime behind it.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="pros-cons">
+    <div class="pros">
+      <h4>My lean</h4>
+      <ul>
+        <li>Start with B, then add A if you want typed/remote control.</li>
+        <li>This preserves Jarvis's working voice pipeline and avoids rewiring everything at once.</li>
+      </ul>
+    </div>
+    <div class="cons">
+      <h4>Watchouts</h4>
+      <ul>
+        <li>C is highest risk because it changes the primary control loop.</li>
+        <li>Voice input through AionUi depends on what its pet/voice APIs expose cleanly.</li>
+      </ul>
+    </div>
+  </div>
+</div>

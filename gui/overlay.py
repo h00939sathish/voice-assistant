@@ -2,9 +2,9 @@
 Floating Overlay - Siri-like Glowing Orb
 """
 
-import tkinter as tk
-import time
 import math
+import time
+import tkinter as tk
 
 
 class AssistantOverlay:
@@ -100,7 +100,7 @@ class AssistantOverlay:
 
             # Outer glow (larger, faded)
             glow_r = r + 15
-            alpha_hex = format(int(60 * (0.3 + 0.7 * pulse)), "02x")
+            format(int(60 * (0.3 + 0.7 * pulse)), "02x")
             # Tkinter doesn't support alpha, so we just show/hide
             self.canvas.coords(
                 self.glow_outer, cx - glow_r, cy - glow_r, cx + glow_r, cy + glow_r
@@ -134,7 +134,7 @@ if __name__ == "__main__":
     # Test state cycle
     def cycle_states():
         states = ["LISTENING", "PROCESSING", "SPEAKING", "IDLE", "LISTENING"]
-        for i, state in enumerate(states):
+        for _i, state in enumerate(states):
             time.sleep(2)
             root.after(0, lambda s=state: app.set_state(s))
 

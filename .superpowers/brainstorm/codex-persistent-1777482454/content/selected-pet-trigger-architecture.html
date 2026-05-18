@@ -1,0 +1,59 @@
+<h2>Selected architecture: pet triggers Jarvis listening</h2>
+<p class="subtitle">AionUi provides the mascot and click-to-talk trigger. Jarvis keeps microphone capture, VAD, STT, LLM routing, tools, memory, and TTS.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Runtime flow</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:12px;align-items:center">
+      <div class="placeholder">AionUi pet<br>single click / mic button</div>
+      <div style="font-size:28px">→</div>
+      <div class="placeholder">Jarvis companion API<br>POST /companion/wake</div>
+      <div style="font-size:28px">→</div>
+      <div class="placeholder">VoiceAssistant.trigger_wake()<br>LISTENING state</div>
+    </div>
+    <div style="height:18px"></div>
+    <div style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:12px;align-items:center">
+      <div class="placeholder">Jarvis VAD/STT<br>captures microphone</div>
+      <div style="font-size:28px">→</div>
+      <div class="placeholder">LLM / tools / memory<br>existing safety gates</div>
+      <div style="font-size:28px">→</div>
+      <div class="placeholder">TTS response<br>follow-up listening</div>
+    </div>
+  </div>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">State mirror back to pet</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;text-align:center">
+      <div class="placeholder">idle</div>
+      <div class="placeholder">listening</div>
+      <div class="placeholder">thinking</div>
+      <div class="placeholder">speaking</div>
+      <div class="placeholder">done</div>
+      <div class="placeholder">error</div>
+    </div>
+    <p style="margin-top:16px">AionUi subscribes to Jarvis state events over WebSocket/SSE and maps them to pet animations.</p>
+  </div>
+</div>
+
+<div class="section">
+  <div class="pros-cons">
+    <div class="pros">
+      <h4>First slice includes</h4>
+      <ul>
+        <li>Companion wake endpoint for AionUi.</li>
+        <li>State event feed for pet animation mapping.</li>
+        <li>Minimal click-to-talk path using existing Jarvis microphone logic.</li>
+      </ul>
+    </div>
+    <div class="cons">
+      <h4>Explicitly later</h4>
+      <ul>
+        <li>AionUi-side audio recording/upload.</li>
+        <li>Remote/mobile voice entry.</li>
+        <li>Replacing Jarvis orb or existing dashboard.</li>
+      </ul>
+    </div>
+  </div>
+</div>

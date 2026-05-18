@@ -1,9 +1,10 @@
 import asyncio
 import logging
 import time
-from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Any
+
 import psutil
 
 # Configure logger
@@ -12,12 +13,16 @@ logger = logging.getLogger("AI_Assistant.WebAgent")
 # Mock valid_user_agent if not available
 try:
     from fake_useragent import UserAgent
+
     ua = UserAgent()
+
     def get_user_agent():
         return ua.random
 except ImportError:
+
     def get_user_agent():
         return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+
 
 # Global Playwright state
 _playwright = None
@@ -26,14 +31,15 @@ _browser_context = None
 _last_activity = None
 _initialization_lock = asyncio.Lock()
 
-async def quick_search_http(query: str, max_results: int = 5) -> List[Dict[str, str]]:
+
+async def quick_search_http(query: str, max_results: int = 5) -> list[dict[str, str]]:
     """
     Fast, lightweight search using DuckDuckGo HTML (no browser required).
     Great for simple queries.
     """
     import aiohttp
     from bs4 import BeautifulSoup
-    
+
     url = "https://html.duckduckgo.com/html/"
     params = {"q": query}
     headers = {"User-Agent": get_user_agent()}
@@ -49,7 +55,7 @@ async def quick_search_http(query: str, max_results: int = 5) -> List[Dict[str, 
         soup = BeautifulSoup(html, "html.parser")
         results = []
 
-        for row in soup.select("tr")[:max_results * 2]:  # Get extra, filter later
+        for row in soup.select("tr")[: max_results * 2]:  # Get extra, filter later
             link = row.select_one("a.result-link")
             snippet = row.select_one("td.result-snippet")
 
@@ -61,11 +67,13 @@ async def quick_search_http(query: str, max_results: int = 5) -> List[Dict[str, 
                 if "duckduckgo.com" in url:
                     continue
 
-                results.append({
-                    "title": title,
-                    "url": url,
-                    "snippet": snippet.get_text(strip=True) if snippet else ""
-                })
+                results.append(
+                    {
+                        "title": title,
+                        "url": url,
+                        "snippet": snippet.get_text(strip=True) if snippet else "",
+                    }
+                )
 
                 if len(results) >= max_results:
                     break
@@ -76,6 +84,7 @@ async def quick_search_http(query: str, max_results: int = 5) -> List[Dict[str, 
     except Exception as e:
         logger.warning(f"HTTP search failed: {e}")
         return []
+
 
 class WebAgent:
     """
@@ -99,7 +108,9 @@ class WebAgent:
             self.max_memory_mb = 600
             self.prefer_http = False  # Can use browser more freely
 
-        logger.info(f"⚡ WebAgent: {self.mode.upper()} mode ({self.total_ram_gb:.1f}GB RAM)")
+        logger.info(
+            f"⚡ WebAgent: {self.mode.upper()} mode ({self.total_ram_gb:.1f}GB RAM)"
+        )
 
         # Browser settings
         self.browser_type = "chromium"
@@ -109,7 +120,7 @@ class WebAgent:
         # State
         self.is_initialized = False
         self.active_tasks = 0
-        self._cleanup_task: Optional[asyncio.Task] = None
+        self._cleanup_task: asyncio.Task | None = None
         self._shutdown_flag = False
 
         # Statistics
@@ -142,7 +153,9 @@ class WebAgent:
                 # Memory check
                 available_mb = psutil.virtual_memory().available / (1024**2)
                 if available_mb < 500:
-                    logger.warning(f"⚠️ Low memory ({available_mb:.0f}MB) - browser disabled")
+                    logger.warning(
+                        f"⚠️ Low memory ({available_mb:.0f}MB) - browser disabled"
+                    )
                     return False
 
                 logger.info("🌐 Initializing Playwright browser...")
@@ -159,7 +172,9 @@ class WebAgent:
                     "args": [
                         "--no-sandbox",
                         "--disable-dev-shm-usage",
-                        "--disable-gpu" if self.total_ram_gb < 12 else "--enable-gpu-rasterization",
+                        "--disable-gpu"
+                        if self.total_ram_gb < 12
+                        else "--enable-gpu-rasterization",
                         "--window-size=1920,1080",
                         "--disable-blink-features=AutomationControlled",
                     ],
@@ -174,7 +189,7 @@ class WebAgent:
                 # Create persistent context
                 _browser_context = await _playwright_browser.new_context(
                     viewport={"width": 1920, "height": 1080},
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 )
 
                 _last_activity = time.time()
@@ -216,7 +231,7 @@ class WebAgent:
             if _browser_context:
                 try:
                     await asyncio.wait_for(_browser_context.close(), timeout=2.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning("Context close timeout")
                 _browser_context = None
 
@@ -224,7 +239,7 @@ class WebAgent:
             if _playwright_browser:
                 try:
                     await asyncio.wait_for(_playwright_browser.close(), timeout=2.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning("Browser close timeout")
                 _playwright_browser = None
 
@@ -232,7 +247,7 @@ class WebAgent:
             if _playwright:
                 try:
                     await asyncio.wait_for(_playwright.stop(), timeout=2.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning("Playwright stop timeout")
                 _playwright = None
 
@@ -275,7 +290,7 @@ class WebAgent:
 
     # ========== SEARCH METHODS ==========
 
-    async def search(self, query: str, num_results: int = 5) -> List[Dict[str, str]]:
+    async def search(self, query: str, num_results: int = 5) -> list[dict[str, str]]:
         """
         Smart search: HTTP first, browser fallback.
         This is the recommended method to use.
@@ -292,7 +307,9 @@ class WebAgent:
         # Fallback to browser
         return await self.search_browser(query, num_results)
 
-    async def search_browser(self, query: str, num_results: int = 5) -> List[Dict[str, str]]:
+    async def search_browser(
+        self, query: str, num_results: int = 5
+    ) -> list[dict[str, str]]:
         """
         Browser-based search (Playwright).
         Uses DuckDuckGo to avoid Google anti-bot.
@@ -316,19 +333,27 @@ class WebAgent:
             for article in articles[:num_results]:
                 try:
                     # DuckDuckGo structure (updated 2024)
-                    link_elem = await article.query_selector('a[data-testid="result-title-a"]')
-                    snippet_elem = await article.query_selector('div[data-result="snippet"]')
+                    link_elem = await article.query_selector(
+                        'a[data-testid="result-title-a"]'
+                    )
+                    snippet_elem = await article.query_selector(
+                        'div[data-result="snippet"]'
+                    )
 
                     if link_elem:
                         title = await link_elem.inner_text()
                         url = await link_elem.get_attribute("href")
-                        snippet = await snippet_elem.inner_text() if snippet_elem else ""
+                        snippet = (
+                            await snippet_elem.inner_text() if snippet_elem else ""
+                        )
 
-                        results.append({
-                            "title": title.strip(),
-                            "url": url,
-                            "snippet": snippet.strip()[:200]
-                        })
+                        results.append(
+                            {
+                                "title": title.strip(),
+                                "url": url,
+                                "snippet": snippet.strip()[:200],
+                            }
+                        )
                 except Exception as e:
                     logger.debug(f"Failed to parse result: {e}")
                     continue
@@ -391,7 +416,7 @@ class WebAgent:
                     pass
             self.active_tasks -= 1
 
-    async def take_screenshot(self, url: str, path: Optional[str] = None) -> Optional[str]:
+    async def take_screenshot(self, url: str, path: str | None = None) -> str | None:
         """Take screenshot of URL."""
         async with self.navigate(url) as page:
             if not page:
@@ -409,17 +434,21 @@ class WebAgent:
                 logger.error(f"Screenshot failed: {e}")
                 return None
 
-    async def search_amazon(self, query: str) -> Dict[str, Any]:
+    async def search_amazon(self, query: str) -> dict[str, Any]:
         """Search Amazon products."""
         async with self.navigate(f"https://www.amazon.com/s?k={query}") as page:
             if not page:
                 return {"error": "Failed to load Amazon"}
 
             try:
-                await page.wait_for_selector('[data-component-type="s-search-result"]', timeout=10000)
+                await page.wait_for_selector(
+                    '[data-component-type="s-search-result"]', timeout=10000
+                )
 
                 products = []
-                items = await page.query_selector_all('[data-component-type="s-search-result"]')
+                items = await page.query_selector_all(
+                    '[data-component-type="s-search-result"]'
+                )
 
                 for item in items[:5]:
                     try:
@@ -429,10 +458,9 @@ class WebAgent:
                         if title_elem and price_elem:
                             title = await title_elem.inner_text()
                             price = await price_elem.inner_text()
-                            products.append({
-                                "title": title.strip(),
-                                "price": f"${price.strip()}"
-                            })
+                            products.append(
+                                {"title": title.strip(), "price": f"${price.strip()}"}
+                            )
                     except (AttributeError, TypeError):
                         continue
 
@@ -443,7 +471,7 @@ class WebAgent:
                 logger.error(f"Amazon search failed: {e}")
                 return {"error": str(e)}
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get usage statistics."""
         return {
             **self.stats,
@@ -457,6 +485,7 @@ class WebAgent:
     def _get_memory_usage(self) -> int:
         """Current memory usage in MB."""
         import psutil
+
         return int(psutil.Process().memory_info().rss / (1024**2))
 
     async def upgrade_mode(self, new_mode: str) -> bool:
@@ -472,6 +501,7 @@ class WebAgent:
         logger.info(f"🔄 Switched to {new_mode.upper()} mode")
         return True
 
+
 # ========== SAFE CLEANUP HELPER ==========
 async def safe_close_web_agent(agent: WebAgent):
     """
@@ -480,7 +510,7 @@ async def safe_close_web_agent(agent: WebAgent):
     """
     try:
         await asyncio.wait_for(agent.close(), timeout=5.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("WebAgent close timeout - forcing shutdown")
     except Exception as e:
         logger.error(f"Error during WebAgent close: {e}")

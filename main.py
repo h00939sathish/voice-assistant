@@ -3,13 +3,14 @@ Buddy Voice Assistant - Main Application (Desktop Mode)
 Uses PyQt6 for Siri-like Orb Overlay and pystray for System Tray.
 """
 
-import sys
-import os
-import time
-import threading
 import asyncio
+import os
+import random
+import sys
+import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional, List, Dict
 
 if os.name == "nt":
     try:
@@ -30,39 +31,42 @@ if sys.stderr and getattr(sys.stderr, "encoding", "").lower() != "utf-8":
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import (
-    ASSISTANT_NAME,
-    SOUNDS_DIR,
-    WAKE_WORD_STARTUP_ENABLED,
-    ORB_IDLE_HIDE_AFTER,
-    MIC_IDLE_RELEASE_AFTER,
-    LOW_MEMORY_MODE,
-    LOW_MEMORY_UNLOAD_DELAY_SEC,
-    MIN_COMMAND_CONFIDENCE,
-)
-from assistant.logger import setup_logger, get_logger
-from assistant.state_machine import AssistantState
-from assistant.cli_parser import parse_args
 from assistant.app_init import (
-    setup_dependencies,
     init_audio_system,
-    preload_components,
     init_proactive_engine,
+    preload_components,
+    setup_dependencies,
     start_dashboard,
 )
-from assistant.orb_overlay import OrbOverlay, OrbState
-from gui.tray import SystemTrayApp
-from assistant.events import (
-    EventBus,
-    StateChangeEvent,
-    TranscriptionEvent,
-    ResponseEvent,
-    StatusEvent,
-    ConfirmationEvent,
-    SubsystemStateEvent,
-)
+from assistant.cli_parser import parse_args
 from assistant.dashboard_bridge import DashboardBridge
+from assistant.events import (
+    ConfirmationEvent,
+    ResponseEvent,
+    StateChangeEvent,
+    StatusEvent,
+    SubsystemStateEvent,
+    TranscriptionEvent,
+)
 from assistant.health_monitor import get_monitor
+from assistant.logger import get_logger, setup_logger
+from assistant.orb_overlay import OrbOverlay, OrbState
+from assistant.state_machine import (
+    AssistantState,
+    explain_invalid_transition,
+    is_valid_transition,
+)
+from config import (
+    ASSISTANT_NAME,
+    LOW_MEMORY_MODE,
+    LOW_MEMORY_UNLOAD_DELAY_SEC,
+    MIC_IDLE_RELEASE_AFTER,
+    MIN_COMMAND_CONFIDENCE,
+    ORB_IDLE_HIDE_AFTER,
+    SOUNDS_DIR,
+    WAKE_WORD_STARTUP_ENABLED,
+)
+from gui.tray import SystemTrayApp
 
 logger = get_logger("main")
 
@@ -70,7 +74,7 @@ logger = get_logger("main")
 class VoiceAssistant:
     """Main voice assistant application"""
 
-    FOLLOWUP_PHRASES: List[str] = [
+    FOLLOWUP_PHRASES: list[str] = [
         "what would you like",
         "what should i",
         "would you like me to",
@@ -82,7 +86,7 @@ class VoiceAssistant:
         "can you clarify",
     ]
 
-    COMMAND_ALIASES: Dict[str, str] = {
+    COMMAND_ALIASES: dict[str, str] = {
         "play music": "spotify play",
         "pause music": "spotify pause",
         "next song": "spotify next",
@@ -96,14 +100,15 @@ class VoiceAssistant:
     }
 
     def __init__(self, audio, stt, tts, llm, skill_router, event_bus) -> None:
-        self.state: AssistantState = AssistantState.IDLE
+        self.state: AssistantState = AssistantState.STARTING
+        self._ready = threading.Event()
         self._running: bool = False
         self._wake_triggered: bool = False
         self._last_activity: float = time.time()
         self._ambient_timeout: float = 30.0
         self._keyboard_available: bool = False
         self.monitor = None
-        self.ui_callback: Optional[Callable] = None
+        self.ui_callback: Callable | None = None
         self.memory = None
         self.long_term_memory = None
         self.proactive_engine = None
@@ -120,7 +125,7 @@ class VoiceAssistant:
         self._mic_released: bool = True
         self._low_memory_mode: bool = LOW_MEMORY_MODE
         self._low_memory_unload_delay_sec: float = max(0.0, LOW_MEMORY_UNLOAD_DELAY_SEC)
-        self._stt_unload_timer: Optional[threading.Timer] = None
+        self._stt_unload_timer: threading.Timer | None = None
         self._stt_unload_lock = threading.Lock()
 
         self.audio = audio
@@ -131,8 +136,15 @@ class VoiceAssistant:
         self.bus = event_bus
 
         self.task_executor = None
+        self.component_handle = None
         self._loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
-        self._loop_thread: Optional[threading.Thread] = None
+        self._loop_thread: threading.Thread | None = None
+
+        from assistant.conversation_memory import ConversationMemory
+        from assistant.long_term_memory import LongTermMemory
+
+        self.memory = ConversationMemory()
+        self.long_term_memory = LongTermMemory()
 
         logger.info(f"  🤖 {ASSISTANT_NAME} Voice Assistant (Orb Mode)")
 
@@ -224,21 +236,9 @@ class VoiceAssistant:
                         self.orb.set_state(OrbState.LISTENING.value)
 
             def toggle_wake_word():
-                self._wake_word_enabled = not self._wake_word_enabled
-                status = "ON" if self._wake_word_enabled else "OFF"
+                enabled = self.set_wake_word_enabled(not self._wake_word_enabled)
+                status = "ON" if enabled else "OFF"
                 logger.info(f"   ⌨️ Wake word toggled: {status}")
-                if self._wake_word_enabled:
-                    self._ensure_mic_active()
-                else:
-                    self._release_microphone()
-                    logger.info("   🎙️ Microphone released")
-                if self.orb:
-                    if self._wake_word_enabled:
-                        self.orb.set_state(OrbState.IDLE.value)
-                        self._orb_is_hidden = False
-                    else:
-                        self.orb.set_state(OrbState.HIDDEN.value)
-                        self._orb_is_hidden = True
                 asyncio.run_coroutine_threadsafe(
                     self.tts.speak_streaming(f"Wake word {status}"), self._loop
                 )
@@ -271,6 +271,25 @@ class VoiceAssistant:
         except Exception as e:
             logger.warning(f"   ⌨️ Keyboard listener failed: {e}")
 
+    def set_wake_word_enabled(self, enabled: bool) -> bool:
+        """Enable or disable continuous wake-word listening."""
+        self._wake_word_enabled = bool(enabled)
+        if self._wake_word_enabled:
+            self._ensure_mic_active()
+        else:
+            self._release_microphone()
+            logger.info("   🎙️ Microphone released")
+
+        if self.orb:
+            if self._wake_word_enabled:
+                self.orb.set_state(OrbState.IDLE.value)
+                self._orb_is_hidden = False
+            else:
+                self.orb.set_state(OrbState.HIDDEN.value)
+                self._orb_is_hidden = True
+
+        return self._wake_word_enabled
+
     def initialize(self) -> None:
         logger.info("📦 Initializing system (Background Preloading Enabled)...")
 
@@ -288,15 +307,18 @@ class VoiceAssistant:
                 "   Low-memory mode enabled: wake-word stays active, STT is loaded after wake and unloaded on idle"
             )
 
-        self.task_executor, self.wake_detector = preload_components(
+        self.component_handle = preload_components(
             self.stt,
             self.llm,
             self.skill_router,
             self.bus,
             self._low_memory_mode,
         )
+        self._sync_background_components()
 
         self.proactive_engine = init_proactive_engine()
+        if self.proactive_engine and hasattr(self.proactive_engine, "memory_system"):
+            self.proactive_engine.memory_system = self.long_term_memory
 
         self.monitor = get_monitor()
         logger.info("🚀 Buddy core initialized!")
@@ -324,6 +346,11 @@ class VoiceAssistant:
             old_state_name = self.state.name
             new_state_name = new_state.name
 
+            if not is_valid_transition(self.state, new_state):
+                reason = explain_invalid_transition(self.state, new_state)
+                logger.warning(f"   ⚠️ {reason}")
+                return
+
             logger.debug(f"[{old_state_name}] → [{new_state_name}]")
 
             self.bus.publish(
@@ -349,6 +376,10 @@ class VoiceAssistant:
         self._running = True
         crash_count = 0
         last_crash_time = 0
+
+        if self.state == AssistantState.STARTING:
+            self._transition(AssistantState.IDLE)
+            self._ready.set()
 
         logger.info("🛡️ Watchdog active")
 
@@ -387,14 +418,34 @@ class VoiceAssistant:
         self._idle_since = time.time()
         self._followup_count = 0
         self._orb_is_hidden = False
-        if self.orb:
-            self.orb.set_state(OrbState.IDLE.value)
         self._transition(AssistantState.LISTENING)
+        if self.orb:
+            self.orb.set_state(OrbState.LISTENING.value)
 
     def _enter_idle(self):
         self._followup_count = 0
         self._idle_since = time.time()
         self._transition(AssistantState.IDLE)
+
+    _GREETINGS = [
+        "Yes?",
+        "How can I help?",
+        "I'm listening",
+        "Go ahead",
+        "What's up?",
+        "Tell me",
+        "I'm here",
+        "Ready when you are",
+    ]
+
+    async def _greet_and_listen(self):
+        self._play_ding()
+        greeting = random.choice(self._GREETINGS)
+        if self.orb:
+            self.orb.set_state(OrbState.WAKE.value)
+        self._transition(AssistantState.SPEAKING)
+        await self.tts.speak_streaming(greeting)
+        self._enter_listening()
 
     async def _run_loop(self) -> None:
         self.state = AssistantState.IDLE
@@ -420,6 +471,8 @@ class VoiceAssistant:
                 raise e
 
     def _perform_self_healing(self) -> None:
+        self._sync_background_components()
+
         if self._wake_word_enabled and not self.audio.is_recording:
             logger.warning("🩹 Healing: Audio not recording. Restarting stream...")
             try:
@@ -473,12 +526,13 @@ class VoiceAssistant:
             logger.critical("🩹 Critical: Async loop thread died!")
 
     async def _process_state(self) -> None:
+        self._sync_background_components()
+
         if self.state == AssistantState.IDLE:
             if self._wake_triggered:
                 self._wake_triggered = False
-                logger.info("   🎙️ Wake triggered — entering LISTENING mode")
-                self._play_ding()
-                self._enter_listening()
+                logger.info("   🎙️ Wake triggered — greeting")
+                await self._greet_and_listen()
                 return
 
             idle_elapsed = time.time() - self._idle_since
@@ -505,8 +559,7 @@ class VoiceAssistant:
                 if self.wake_detector:
                     detected = self.wake_detector.process_audio(chunk)
                     if detected:
-                        self._play_ding()
-                        self._enter_listening()
+                        await self._greet_and_listen()
                         return
                 break
 
@@ -559,6 +612,13 @@ class VoiceAssistant:
         ding_path = SOUNDS_DIR / "ding.wav"
         if ding_path.exists():
             self.audio.play_file(str(ding_path))
+
+    def _sync_background_components(self) -> None:
+        handle = getattr(self, "component_handle", None)
+        if handle is None:
+            return
+        self.wake_detector = handle.wake_detector
+        self.task_executor = handle.task_executor
 
     async def _process_speech(self, audio_bytes: bytes) -> None:
         text, confidence = self.stt.transcribe(audio_bytes)
@@ -792,14 +852,7 @@ def main():
 
     def _toggle_mic(assistant, orb):
         def _inner():
-            assistant._wake_word_enabled = not assistant._wake_word_enabled
-            status = "ON" if assistant._wake_word_enabled else "OFF"
-            if assistant._wake_word_enabled:
-                assistant._ensure_mic_active()
-                orb.set_state("idle")
-            else:
-                assistant._release_microphone()
-                orb.set_state("hidden")
+            assistant.set_wake_word_enabled(not assistant._wake_word_enabled)
 
         return _inner
 
@@ -855,11 +908,19 @@ def main():
         return
 
     def on_show():
-        assistant.trigger_wake()
+        loop = assistant._loop
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(assistant.trigger_wake)
+        else:
+            assistant.trigger_wake()
         orb.set_state("listening")
 
     def on_exit():
-        assistant.shutdown()
+        loop = assistant._loop
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(assistant.shutdown)
+        else:
+            assistant.shutdown()
         orb.stop()
         tray.stop()
         os._exit(0)
@@ -869,6 +930,42 @@ def main():
 
     assistant_thread = threading.Thread(target=run_assistant, daemon=True)
     assistant_thread.start()
+
+    def inject_assistant():
+        assistant._ready.wait(timeout=15)
+        try:
+            from assistant.api_server import set_assistant as set_api_assistant
+
+            set_api_assistant(assistant)
+            logger.info("   ✓ Assistant injected into API server")
+        except Exception as e:
+            logger.warning(f"Failed to inject assistant: {e}")
+
+    inject_thread = threading.Thread(target=inject_assistant, daemon=True)
+    inject_thread.start()
+
+    # Start API server in background thread for AionUI MCP
+    api_port = int(os.environ.get("BUDDY_API_PORT", "8765"))
+
+    def run_api_server():
+        try:
+            import uvicorn
+
+            from assistant.api_server import app as api_app
+
+            uvicorn.run(
+                api_app,
+                host="0.0.0.0",
+                port=api_port,
+                log_level="warning",
+                log_config=None,
+            )
+        except Exception as e:
+            logger.warning(f"API server failed: {e}")
+
+    api_thread = threading.Thread(target=run_api_server, daemon=True)
+    api_thread.start()
+    logger.info(f"   🌐 API server: http://localhost:{api_port}")
 
     tray = SystemTrayApp(on_exit=on_exit, on_show=on_show)
 

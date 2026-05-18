@@ -1,13 +1,15 @@
 """
 System Tray Icon - Background control for the assistant
 """
-import threading
+
 import logging
-from typing import Callable, Optional
+import threading
+from collections.abc import Callable
 
 try:
     import pystray
     from PIL import Image, ImageDraw
+
     TRAY_AVAILABLE = True
 except ImportError:
     TRAY_AVAILABLE = False
@@ -18,16 +20,16 @@ logger = logging.getLogger(__name__)
 
 def create_icon_image(color: str = "#4A90D9", size: int = 64) -> "Image.Image":
     """Create a simple circular icon"""
-    image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    
+
     # Draw filled circle
     margin = 4
     draw.ellipse(
         [margin, margin, size - margin, size - margin],
         fill=color,
         outline="#FFFFFF",
-        width=2
+        width=2,
     )
     return image
 
@@ -36,18 +38,20 @@ class TrayIcon:
     """
     System tray icon with control menu.
     """
-    
-    def __init__(self, 
-                 on_pause: Optional[Callable] = None,
-                 on_resume: Optional[Callable] = None,
-                 on_quit: Optional[Callable] = None):
+
+    def __init__(
+        self,
+        on_pause: Callable | None = None,
+        on_resume: Callable | None = None,
+        on_quit: Callable | None = None,
+    ):
         self.on_pause = on_pause
         self.on_resume = on_resume
         self.on_quit = on_quit
-        self._icon: Optional["pystray.Icon"] = None
-        self._thread: Optional[threading.Thread] = None
+        self._icon: pystray.Icon | None = None
+        self._thread: threading.Thread | None = None
         self._paused = False
-        
+
         if not TRAY_AVAILABLE:
             logger.warning("pystray not installed. Tray icon disabled.")
 
@@ -55,7 +59,7 @@ class TrayIcon:
         """Start tray icon in background thread"""
         if not TRAY_AVAILABLE:
             return
-            
+
         self._thread = threading.Thread(target=self._run, daemon=True, name="TrayIcon")
         self._thread.start()
         logger.info("   🔲 System tray icon started")
@@ -63,16 +67,18 @@ class TrayIcon:
     def _run(self):
         """Run pystray event loop"""
         menu = pystray.Menu(
-            pystray.MenuItem("Pause", self._toggle_pause, checked=lambda item: self._paused),
+            pystray.MenuItem(
+                "Pause", self._toggle_pause, checked=lambda item: self._paused
+            ),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Quit", self._quit)
+            pystray.MenuItem("Quit", self._quit),
         )
-        
+
         self._icon = pystray.Icon(
             name="BuddyAssistant",
             icon=create_icon_image(),
             title="Buddy Assistant",
-            menu=menu
+            menu=menu,
         )
         self._icon.run()
 
@@ -87,7 +93,7 @@ class TrayIcon:
             logger.info("   ▶️ Assistant resumed")
             if self.on_resume:
                 self.on_resume()
-        
+
         # Update icon color
         if self._icon:
             color = "#888888" if self._paused else "#4A90D9"

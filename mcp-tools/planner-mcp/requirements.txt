@@ -1,0 +1,3 @@
+# Planner MCP Server Dependencies
+# SQLite is stdlib — only the MCP SDK is needed
+mcp>=1.0.0

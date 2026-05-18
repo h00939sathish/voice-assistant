@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "buddy": {
+      "command": "python",
+      "args": ["C:/Users/h0093/Documents/new/mcp-server/server.py"],
+      "env": {
+        "BUDDY_API_URL": "http://localhost:8765"
+      }
+    }
+  }
+}

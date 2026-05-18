@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
 
 from assistant.skill_router import SkillRouter
 from assistant.skills_registry import SkillsRegistry
@@ -34,7 +35,9 @@ async def test_reminder_queries_route_directly(loaded_router):
     result = await loaded_router.route("list reminders", {})
 
     assert result == "ok"
-    loaded_router._execute_skill.assert_awaited_once_with("reminder", "list reminders", {})
+    loaded_router._execute_skill.assert_awaited_once_with(
+        "reminder", "list reminders", {}
+    )
 
 
 @pytest.mark.asyncio

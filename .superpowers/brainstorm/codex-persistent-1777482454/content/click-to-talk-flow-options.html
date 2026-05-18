@@ -1,0 +1,61 @@
+<h2>Click-to-talk flow for the AionUi pet</h2>
+<p class="subtitle">Both options keep Jarvis as the assistant brain. The difference is where microphone capture happens after you click the pet.</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">A. Pet triggers Jarvis listening</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center">
+            <div class="placeholder">Click pet<br>or AionUi button</div>
+            <div style="font-size:28px">→</div>
+            <div class="placeholder">Jarvis starts mic<br>VAD → STT → reply</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Trigger Existing Listener</h3>
+      <p>AionUi only sends “wake now”. Jarvis captures the microphone with its current VAD/STT pipeline.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">B. Pet records and sends audio</div>
+        <div class="mockup-body">
+          <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center">
+            <div class="placeholder">Hold/click pet<br>record audio</div>
+            <div style="font-size:28px">→</div>
+            <div class="placeholder">Jarvis transcribes<br>then processes</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Send Audio Clip</h3>
+      <p>AionUi owns push-to-talk recording and sends the clip to Jarvis for transcription and response.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="pros-cons">
+    <div class="pros">
+      <h4>Recommended first</h4>
+      <ul>
+        <li>A is the safer first slice because it reuses Jarvis's existing microphone, VAD, STT, wake handling, and follow-up logic.</li>
+        <li>It avoids fighting over the microphone between AionUi and Jarvis.</li>
+      </ul>
+    </div>
+    <div class="cons">
+      <h4>Later upgrade</h4>
+      <ul>
+        <li>B is better if you want true hold-to-talk from inside AionUi or remote WebUI/mobile voice.</li>
+        <li>It needs a proper audio upload/stream endpoint and format normalization.</li>
+      </ul>
+    </div>
+  </div>
+</div>

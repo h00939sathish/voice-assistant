@@ -1,0 +1,3 @@
+# Vector Memory MCP — Dependencies
+# LongTermMemory uses only stdlib + optional sqlite-vec
+mcp>=1.0.0

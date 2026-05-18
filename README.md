@@ -51,9 +51,13 @@ WHISPER_MODEL=base
 LLM_PRIORITY_MODE=local_first  # local_first | cloud_first | online_only
 
 # Wake Word (0.3-0.7, higher = fewer false positives)
+WAKE_WORD_STARTUP_ENABLED=false
 WAKE_WORD_THRESHOLD=0.5
 WAKE_WORD_CONSECUTIVE_HITS=2
 WAKE_WORD_COOLDOWN_MS=2000
+WAKE_WORD_LOG_SCORES=false
+WAKE_WORD_SCORE_LOG_INTERVAL_MS=1000
+AUDIO_INPUT_DEVICE=auto  # follows Windows default, or pin by index/name like Airdopes
 
 # VAD (0.3-0.9, higher = less sensitive to background noise)
 VAD_THRESHOLD=0.6
@@ -64,9 +68,13 @@ SILENCE_DURATION_MS=2000
 
 | Variable | Default | Range | Description |
 |----------|---------|-------|-------------|
+| `AUDIO_INPUT_DEVICE` | auto | auto/index/name | Follows Windows default while running, or pins a specific mic |
+| `WAKE_WORD_STARTUP_ENABLED` | false | true/false | Starts continuous wake-word mode instead of push-to-talk |
 | `WAKE_WORD_THRESHOLD` | 0.5 | 0.3-0.7 | Higher = fewer false wake-ups |
 | `WAKE_WORD_CONSECUTIVE_HITS` | 2 | 1-3 | Consecutive detections required |
 | `WAKE_WORD_COOLDOWN_MS` | 2000 | 500-5000 | Cooldown between detections |
+| `WAKE_WORD_LOG_SCORES` | false | true/false | Prints wake model scores for calibration |
+| `WAKE_WORD_SCORE_LOG_INTERVAL_MS` | 1000 | 250-5000 | Score logging interval |
 | `VAD_THRESHOLD` | 0.6 | 0.3-0.9 | Higher = less sensitive to noise |
 | `SILENCE_DURATION_MS` | 2000 | 500-5000 | Silent duration to stop listening |
 | `LLM_PRIORITY_MODE` | local_first | local_first/cloud_first/online_only | LLM preference order |

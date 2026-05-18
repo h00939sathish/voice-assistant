@@ -1,0 +1,11 @@
+FROM gemma4:e4b
+
+# We must remove the kv_type parameter for now.
+
+# Lower the context window. 8192 is the safe sweet spot for 4GB VRAM without KV compression.
+PARAMETER num_ctx 8192
+
+# Offload layers to your GPU.
+PARAMETER num_gpu 28 
+
+SYSTEM """You are Jarvis, a highly capable local AI assistant. Keep responses concise, technical, and accurate."""

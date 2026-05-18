@@ -1,0 +1,2 @@
+# Google Apps Script MCP — Dependencies
+mcp>=1.0.0

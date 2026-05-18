@@ -4,13 +4,35 @@ Logging configuration for Buddy Voice Assistant
 
 import logging
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 LOG_DIR = Path(__file__).parent.parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 LOG_FILE = LOG_DIR / f"buddy_{datetime.now().strftime('%Y%m%d')}.log"
+
+
+class SafeConsoleHandler(logging.StreamHandler):
+    """Stream handler that degrades gracefully on non-UTF Windows consoles."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            stream = self.stream
+            try:
+                stream.write(msg + self.terminator)
+            except UnicodeEncodeError:
+                encoding = getattr(stream, "encoding", None) or "utf-8"
+                safe_msg = (
+                    (msg + self.terminator)
+                    .encode(encoding, errors="replace")
+                    .decode(encoding, errors="replace")
+                )
+                stream.write(safe_msg)
+            self.flush()
+        except Exception:
+            self.handleError(record)
 
 
 def setup_logger(name: str = "buddy") -> logging.Logger:
@@ -29,7 +51,7 @@ def setup_logger(name: str = "buddy") -> logging.Logger:
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler = SafeConsoleHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)

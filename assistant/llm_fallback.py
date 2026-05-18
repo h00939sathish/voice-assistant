@@ -2,7 +2,7 @@
 LLM Fallback - Fallback logic and provider priority management
 """
 
-from typing import List, Dict, Any, Callable, Optional
+from typing import Any
 
 
 class FallbackConfig:
@@ -28,7 +28,7 @@ class FallbackConfig:
         else:
             return (reasoning_rank, latency_rank, local_rank)
 
-    def sort_providers(self, providers: List[dict], intent: str) -> List[tuple]:
+    def sort_providers(self, providers: list[dict], intent: str) -> list[tuple]:
         sorted_providers = sorted(
             providers, key=lambda p: self.compute_priority(p, intent)
         )
@@ -50,7 +50,7 @@ class FallbackChain:
     def reset(self):
         self._all_providers_failed = False
 
-    def should_fallback(self, response: Optional[str]) -> bool:
+    def should_fallback(self, response: str | None) -> bool:
         return response is None
 
     def get_error_response(self) -> str:
@@ -58,8 +58,8 @@ class FallbackChain:
 
 
 def create_provider_priority_list(
-    providers: List[Dict[str, Any]], intent: str, prefer_local: bool = True
-) -> List[tuple]:
+    providers: list[dict[str, Any]], intent: str, prefer_local: bool = True
+) -> list[tuple]:
     """Create sorted provider priority queue based on intent and preferences"""
     config = FallbackConfig(prefer_local)
     return config.sort_providers(providers, intent)
