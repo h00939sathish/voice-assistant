@@ -127,6 +127,35 @@ def api_execution_log():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/memory")
+def api_memory():
+    return jsonify({"name": "Sathish", "projects": ["JARVIS", "Trading System V4"], "recent": ["Uses MSI Thin 15", "Works with OpenBB", "Uses Railway"], "pinned": []})
+
+@app.route("/api/automations")
+def api_automations():
+    return jsonify([
+        {"id": "1", "name": "Trading Monitor", "status": "running"},
+        {"id": "2", "name": "Daily Research Scan", "status": "scheduled"},
+        {"id": "3", "name": "System Backup", "status": "completed"},
+        {"id": "4", "name": "Railway Health Check", "status": "running"},
+    ])
+
+@app.route("/api/alerts")
+def api_alerts():
+    return jsonify([
+        {"type": "warning", "message": "Gemini quota at 85%"},
+        {"type": "info", "message": "Railway deployment completed"},
+    ])
+
+@app.route("/api/agent/log")
+def api_agent_log():
+    return jsonify([
+        {"timestamp": "08:21", "message": "Research Agent started"},
+        {"timestamp": "08:23", "message": "OpenBB scan completed"},
+        {"timestamp": "08:24", "message": "Memory updated"},
+        {"timestamp": "08:25", "message": "Generated strategy report"},
+    ])
+
 @app.route("/api/reminders")
 def api_reminders():
     rows = _get_reminders()

@@ -6,6 +6,7 @@ import platform
 import subprocess
 import time
 
+import ctypes
 import pyautogui
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume

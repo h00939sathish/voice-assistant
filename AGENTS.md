@@ -41,3 +41,71 @@ This project is indexed by GitNexus as **voice-assistant** (78311 symbols, 12525
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+# Session Anchors
+
+## 2026-06-23 — ARVIS OS Dashboard Redesign
+
+Full 3-column AI OS dashboard rebuild. React + Tailwind CSS v4 static site served from `dashboard/`. Three panels: JARVIS Core (left), AI Workspace (center), AI Brain (right). Serves as a companion overlay — loads separately from the Flask backend and communicates via REST + SSE.
+
+Design ethos: deep navy/black, electric blue + subtle gold, glassmorphism, cinematic animations, reactive orb, live system metrics, memory panel, agent feed, automations grid. Every state change animated. Zero empty panels — every section shows live or default placeholder content.
+
+**Key implementation decisions:**
+- Ran `npx @tailwindcss/cli init` on `dashboard/` to get Tailwind v4 working standalone
+- All CSS via `@import "tailwindcss"` in `style.css` — no JS bundler
+- WebSocket connection on `/ws/dashboard` from Flask-SocketIO for real-time data push
+- Flask backend already has `dashboard/` blueprint — injects `index.html` which loads `app.js`
+- Backend push model: emits JSON events (status, metrics, memory, agent_log, automation, alerts, orb)
+- Frontend `app.js` consumes events and mutates store, React re-renders on state changes
+- Architecture: no bundler, no JSX transform, no Vite — React loaded from CDN with Babel standalone for JSX in `<script type="text/babel">` tags within `templates/index.html`
+- Orb canvas renders via vanilla JS `requestAnimationFrame` (not React) for 60fps animation performance
+- Dash avatar: animated SVG path morphing between idle/listening/thinking/speaking/error states
+
+- **Routes to keep** (from existing Flask `dashboard/app.py`):
+  - `/` serves `index.html`
+  - `/api/status` returns current state
+  - `/api/wake` triggers wake
+  - `/api/companion/wake` companion wake
+  - `/api/companion/state` companion state
+  - `/api/chat` text chat
+  - `/api/memory` memory panel data
+  - `/api/memory/<id>` individual memory
+  - `/api/metrics` system metrics
+  - `/api/agent/log` agent activity feed
+  - `/api/automations` automation list
+  - `/api/alerts` system alerts
+  - SSE endpoint `/api/events` for live streaming
+
+- **WebSocket events** (server → client):
+  - `state` → `{state: "listening"|"thinking"|"speaking"|"error"}`
+  - `metrics` → `{cpu, ram, gpu, vram, disk, network}`
+  - `providers` → `[{name, status}]`
+  - `memory` → `{user, projects, recent, pinned}`
+  - `agent_log` → `{timestamp, message}`
+  - `automation` → `{id, name, status}`
+  - `alert` → `{type, message}`
+  - `transcript` → `{text, speaker}`
+
+**Component tree:**
+```
+App
+├── OrbCanvas (vanilla JS, canvas 2d)
+├── LeftPanel (JARVIS Core)
+│   ├── AvatarArea → orb container
+│   ├── VoiceStatus
+│   ├── CurrentObjective
+│   └── TaskQueue
+├── CenterPanel (AI Workspace)
+│   ├── ConversationArea
+│   │   ├── MessageList
+│   │   └── ThinkingIndicator
+│   ├── QuickActionsBar
+│   └── InputArea
+└── RightPanel (AI Brain)
+    ├── SystemStatus (CPU, RAM, GPU, disk, providers)
+    ├── ActiveModel
+    ├── MemoryPanel (user info, projects, recent/pinned memories)
+    ├── AgentFeed (live log)
+    ├── Automations (running/scheduled/completed/failed)
+    └── Alerts (errors, warnings, critical)
+```
