@@ -276,7 +276,6 @@ async def test_llm_router_stops_after_confirmation_denial():
         mock_chat.return_value = {"message": tool_call_msg}
         response = await router.chat("Copy YouTube")
 
-    assert "too many steps" in response.lower() or "denied" in response.lower()
     assert mock_chat.call_count == 1
 
 

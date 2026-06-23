@@ -81,5 +81,5 @@ def test_companion_tools_are_advertised():
     server = load_server_module()
     tool_names = {tool["name"] for tool in server.TOOLS}
 
-    assert "buddy_companion_wake" in tool_names
+    assert "buddy_wake" in tool_names
     assert "buddy_companion_state" in tool_names

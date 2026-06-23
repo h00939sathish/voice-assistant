@@ -15,6 +15,18 @@ BUDDY_API_URL = "http://localhost:8765"
 BUDDY_DASHBOARD_URL = "http://localhost:5050"
 
 
+async def companion_wake() -> str:
+    r = await call_buddy_api(
+        "/api/companion/wake", method="POST", base_url=BUDDY_DASHBOARD_URL
+    )
+    return json.dumps(r, indent=2)
+
+
+async def companion_state() -> str:
+    r = await call_buddy_api("/api/companion/state", base_url=BUDDY_DASHBOARD_URL)
+    return json.dumps(r, indent=2)
+
+
 async def call_buddy_api(
     endpoint: str, method: str = "GET", data: dict = None, base_url: str = None
 ) -> dict:
@@ -227,14 +239,10 @@ async def handle_tool_call(name: str, arguments: dict) -> str:
         return json.dumps(r, indent=2)
 
     elif name == "buddy_wake":
-        r = await call_buddy_api(
-            "/api/companion/wake", method="POST", base_url=BUDDY_DASHBOARD_URL
-        )
-        return json.dumps(r, indent=2)
+        return await companion_wake()
 
     elif name == "buddy_companion_state":
-        r = await call_buddy_api("/api/companion/state", base_url=BUDDY_DASHBOARD_URL)
-        return json.dumps(r, indent=2)
+        return await companion_state()
 
     elif name == "buddy_speak":
         r = await call_buddy_api(
