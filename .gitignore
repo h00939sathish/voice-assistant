@@ -55,3 +55,11 @@ backups/
 .DS_Store
 Thumbs.db
 .gitnexus
+
+# Runtime data (database files created during use)
+data/*.db
+data/*.jsonl
+
+# Cache
+.spotify_cache/
+.superpowers/

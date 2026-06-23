@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 app = FastAPI(title="Buddy Assistant API")
 
-BUDDY_PATH = os.environ.get("BUDDY_PATH", "C:/Users/h0093/Documents/new")
+BUDDY_PATH = os.environ.get("BUDDY_PATH", str(Path(__file__).resolve().parent.parent))
 
 AIONUI_LIFECYCLE_LOG_ENABLED = os.environ.get(
     "BUDDY_AIONUI_LIFECYCLE_LOG", ""
@@ -1370,4 +1370,4 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.environ.get("BUDDY_API_PORT", "8765"))
-    uvicorn.run(app, host="0.0.0.0", port=port, log_config=None)
+    uvicorn.run(app, host="127.0.0.1", port=port, log_config=None)

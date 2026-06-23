@@ -4,6 +4,7 @@ Speech-to-Text using faster-whisper with Silero VAD
 
 import concurrent.futures
 import gc
+import logging
 import os
 import sys
 import threading
@@ -27,6 +28,8 @@ from config import (
     WHISPER_MODEL,
 )
 
+logger = logging.getLogger("buddy.stt")
+
 
 class SpeechToText(ISTTProvider):
     """Speech-to-Text with VAD-based endpoint detection"""
@@ -45,7 +48,7 @@ class SpeechToText(ISTTProvider):
             if self._is_loaded:
                 return
 
-            print("🔄 Loading STT models...")
+            logger.info("🔄 Loading STT models...")
 
             # 1. Load faster-whisper
             try:
@@ -54,11 +57,9 @@ class SpeechToText(ISTTProvider):
                     device=WHISPER_DEVICE,
                     compute_type=WHISPER_COMPUTE_TYPE,
                 )
-                print(
-                    f"   ✅ Whisper model: {WHISPER_MODEL} ({WHISPER_DEVICE.upper()})"
-                )
+                logger.info(f"   ✅ Whisper model: {WHISPER_MODEL} ({WHISPER_DEVICE.upper()})")
             except Exception as e:
-                print(f"   ❌ Whisper load failed: {e}")
+                logger.error(f"   ❌ Whisper load failed: {e}")
 
             # 2. Load Silero VAD (Safe Mode: pure torch)
             try:
@@ -69,7 +70,7 @@ class SpeechToText(ISTTProvider):
                     onnx=False,
                 )
                 self.vad_model.to("cpu")
-                print("   ✅ Silero VAD loaded (Safe Mode)")
+                logger.info("   ✅ Silero VAD loaded (Safe Mode)")
             except Exception as e:
                 print(f"   ⚠️ Silero VAD failed ({e}). Switching to Energy Fallback.")
                 self.vad_model = None  # Trigger Energy Fallback in listen logic
@@ -162,7 +163,7 @@ class SpeechToText(ISTTProvider):
         start_time = time.time()
         has_speech = False
 
-        print("👂 Listening... (speak now)")
+        logger.info("👂 Listening... (speak now)")
 
         while time.time() - start_time < max_duration:
             chunk = audio_manager.get_audio_chunk(timeout=0.1)
@@ -199,11 +200,11 @@ class SpeechToText(ISTTProvider):
                     silence_samples += 1
                     # Check if we've had enough silence to stop
                     if silence_samples >= silence_threshold:
-                        print("   🔇 Silence detected, processing...")
+                        logger.info("   🔇 Silence detected, processing...")
                         break
 
         if not has_speech:
-            print("   ⚠️ No speech detected")
+            logger.warning("   ⚠️ No speech detected")
             return None
 
         # Combine all audio chunks

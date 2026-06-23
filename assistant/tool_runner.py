@@ -97,7 +97,6 @@ _IDEMPOTENT_TOOLS: set = {
     "get_time",
     "search_web",
     "search_tools",
-    "screen_awareness",
     "memory_control",
     "google_search",
 }

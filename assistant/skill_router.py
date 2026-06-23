@@ -5,6 +5,7 @@ Hybrid approach: keyword matching first, then LLM classification.
 
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,8 @@ from assistant.interfaces import ILLMProvider, ITTSProvider
 from assistant.mcp_subprocess_loader import MCPSubprocessLoader, MCPSubprocessProxy
 from assistant.skill_response import SkillResponse
 from assistant.skills_registry import SkillsRegistry
+
+logger = logging.getLogger("buddy.skill_router")
 
 # Thread pool for parallel skill imports
 _import_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="skill_import")
@@ -35,21 +38,17 @@ class SkillRouter:
         "browser",
         "calendar",
         "clipboard",
+        "computer_use",
         "file_manager",
         "google_search",
         "memory_control",
         "news",
-        "quick_actions",
         "registry",
         "reminder",
-        "screen_awareness",
-        "system",
         "system_monitor",
         "time",
-        "vision",
         "weather",
         "web",
-        "window_manager",
     }
 
     def __init__(
@@ -72,14 +71,14 @@ class SkillRouter:
 
     def load_skills(self):
         """Load all registered skills from the registry."""
-        print("📦 Loading skills...")
+        logger.info("📦 Loading skills...")
 
         # Import all skill modules to trigger registration
         self._import_all_skills()
 
         # Log discovered skills (but don't instantiate yet)
         skills = SkillsRegistry.get_all_skills()
-        print(f"   Note: {len(skills)} skills registered (Lazy Loading Enabled)")
+        logger.info(f"   Note: {len(skills)} skills registered (Lazy Loading Enabled)")
         for name, meta in skills.items():
             print(f"   - {name}: {meta.description[:50]}...")
 

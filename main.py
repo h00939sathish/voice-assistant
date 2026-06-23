@@ -58,15 +58,20 @@ from assistant.state_machine import (
 )
 from config import (
     ASSISTANT_NAME,
+    INTERRUPT_MS,
+    INTERRUPT_THRESHOLD,
     LOW_MEMORY_MODE,
     LOW_MEMORY_UNLOAD_DELAY_SEC,
     MIC_IDLE_RELEASE_AFTER,
     MIN_COMMAND_CONFIDENCE,
     ORB_IDLE_HIDE_AFTER,
+    SESSION_ENABLED,
+    SESSION_IDLE_TIMEOUT,
     SOUNDS_DIR,
     WAKE_WORD_STARTUP_ENABLED,
 )
 from gui.tray import SystemTrayApp
+from assistant.vad import InterruptionVAD
 
 logger = get_logger("main")
 
@@ -120,6 +125,11 @@ class VoiceAssistant:
         self._idle_since: float = time.time()
         self._idle_hide_after: float = ORB_IDLE_HIDE_AFTER
         self._mic_idle_release_after: float = MIC_IDLE_RELEASE_AFTER
+        self._in_session: bool = False
+        self._session_enabled: bool = SESSION_ENABLED
+        self._session_idle_timeout: float = SESSION_IDLE_TIMEOUT
+        self._interrupt_threshold: float = INTERRUPT_THRESHOLD
+        self._interrupt_ms: int = INTERRUPT_MS
         self._followup_count: int = 0
         self._orb_is_hidden: bool = True
         self._mic_released: bool = True
@@ -401,6 +411,7 @@ class VoiceAssistant:
                 from assistant.events import ErrorEvent
 
                 self.bus.publish(ErrorEvent(error=e, component="VoiceAssistant"))
+                self._transition(AssistantState.ERROR)
 
                 if crash_count >= 3:
                     logger.critical("❌ Too many crashes. Aborting.")
@@ -531,7 +542,8 @@ class VoiceAssistant:
         if self.state == AssistantState.IDLE:
             if self._wake_triggered:
                 self._wake_triggered = False
-                logger.info("   🎙️ Wake triggered — greeting")
+                self._in_session = True
+                logger.info("   🎙️ Wake triggered — session started")
                 await self._greet_and_listen()
                 return
 
@@ -598,7 +610,10 @@ class VoiceAssistant:
                 self._transition(AssistantState.PROCESSING)
                 self._idle_since = time.time()
                 await self._process_speech(audio_bytes)
+            elif self._in_session and time.time() - self._last_activity < self._session_idle_timeout:
+                pass
             else:
+                self._in_session = False
                 self._enter_idle()
 
         elif self.state == AssistantState.PROCESSING:
@@ -630,7 +645,8 @@ class VoiceAssistant:
                 confidence,
                 MIN_COMMAND_CONFIDENCE,
             )
-            self._enter_idle()
+            if not self._in_session:
+                self._enter_idle()
             return
 
         final_text, should_continue = await self._handle_user_text(
@@ -640,46 +656,44 @@ class VoiceAssistant:
         )
 
         self._transition(AssistantState.SPEAKING)
-        if not self._wake_word_enabled:
-            self._release_microphone()
 
         was_interrupted = threading.Event()
         interrupt_event = threading.Event()
-        listener_thread = None
+        vad = InterruptionVAD(
+            threshold=self._interrupt_threshold,
+            required_ms=self._interrupt_ms,
+        )
 
-        if self._wake_word_enabled and self.wake_detector:
+        def interruption_monitor():
+            self._ensure_mic_active()
+            while not interrupt_event.is_set():
+                chunk = self.audio.get_audio_chunk(timeout=0.05)
+                if chunk and vad.is_speech(chunk):
+                    logger.info("   ⚠️ User interrupted speech!")
+                    self._play_ding()
+                    self.tts.stop()
+                    was_interrupted.set()
+                    break
 
-            def interrupt_listener():
-                self._ensure_mic_active()
-                while not interrupt_event.is_set():
-                    chunk = self.audio.get_audio_chunk(timeout=0.1)
-                    if chunk and self.wake_detector:
-                        if self.wake_detector.process_audio(chunk):
-                            logger.info("   ⚠️ User interrupted speech with Wake Word!")
-                            self._play_ding()
-                            self.tts.stop()
-                            was_interrupted.set()
-                            break
-
-            listener_thread = threading.Thread(target=interrupt_listener, daemon=True)
-            listener_thread.start()
+        monitor_thread = threading.Thread(
+            target=interruption_monitor, daemon=True
+        )
+        monitor_thread.start()
 
         try:
             await self.tts.speak_streaming(final_text)
         finally:
             interrupt_event.set()
-            if listener_thread:
-                listener_thread.join(timeout=0.2)
+            monitor_thread.join(timeout=0.2)
 
         if was_interrupted.is_set():
-            logger.info("👂 Listening for follow-up (wake word interrupt)...")
+            logger.info("👂 User interrupted — listening...")
             threading.Thread(target=self.stt.reload_if_needed, daemon=True).start()
             self._enter_listening()
-        elif should_continue and self._followup_count < 1:
+        elif self._in_session or (should_continue and self._followup_count < 1):
             self._followup_count += 1
-            logger.info(f"👂 Listening for follow-up ({self._followup_count}/1)...")
+            logger.info("👂 Session active — listening for next utterance...")
             threading.Thread(target=self.stt.reload_if_needed, daemon=True).start()
-
             self._ensure_mic_active()
             self._warm_stt_async()
             self._idle_since = time.time()
@@ -688,6 +702,7 @@ class VoiceAssistant:
                 self.orb.set_state(OrbState.IDLE.value)
             self._transition(AssistantState.LISTENING)
         else:
+            self._in_session = False
             self._enter_idle()
 
     async def _handle_user_text(
@@ -955,7 +970,7 @@ def main():
 
             uvicorn.run(
                 api_app,
-                host="0.0.0.0",
+                host="127.0.0.1",
                 port=api_port,
                 log_level="warning",
                 log_config=None,

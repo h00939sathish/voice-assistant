@@ -17,7 +17,6 @@ Memory types:
 - Relationships ("Boss is John", "Dog is named Max")
 """
 
-import hashlib
 import json
 import re
 import sqlite3
@@ -110,6 +109,7 @@ class LongTermMemory:
         self._vec = None
         self._conn_pool: list[sqlite3.Connection] = []
         self._pool_lock = threading.Lock()
+        self._last_consolidation = None
 
         if not self.db_path.parent.exists():
             try:
@@ -274,8 +274,9 @@ class LongTermMemory:
             self._apply_temporal_decay()
         except Exception:
             pass
+        # Defer consolidation to background thread (avoids O(n²) blocking startup)
         try:
-            self.consolidate()
+            threading.Thread(target=self._consolidate_if_due, daemon=True).start()
         except Exception:
             pass
 
@@ -286,7 +287,7 @@ class LongTermMemory:
         try:
             import ollama
 
-            response = ollama.embeddings(model="all-minilm", prompt=text)
+            response = ollama.Client(timeout=3.0).embeddings(model="all-minilm", prompt=text)
             if isinstance(response, dict) and "embedding" in response:
                 return response["embedding"]
         except Exception:
@@ -303,22 +304,7 @@ class LongTermMemory:
         except Exception as e:
             print(f"   [!] SentenceTransformers error: {e}")
 
-        return self._simple_hash_embedding(text)
-
-    def _simple_hash_embedding(self, text: str, dim: int = 384) -> list[float]:
-        """Simple hashing-based embedding for fallback"""
-        text = text.lower().strip()
-        words = re.findall(r"\b\w+\b", text)
-        vector = [0.0] * dim
-        for word in words:
-            hash_val = int(hashlib.md5(word.encode()).hexdigest(), 16)
-            idx = hash_val % dim
-            vector[idx] += 1.0
-
-        magnitude = sum(x**2 for x in vector) ** 0.5
-        if magnitude > 0:
-            vector = [x / magnitude for x in vector]
-        return vector
+        return None
 
     def _extract_keywords(self, text: str) -> list[str]:
         """Extract keywords from text for indexing"""
@@ -519,6 +505,25 @@ class LongTermMemory:
         except Exception as e:
             print(f"   [!] Temporal decay error: {e}")
 
+    def _consolidate_if_due(self):
+        """Consolidate in background if not run in the last 24h and total count < 500."""
+        if self._last_consolidation:
+            elapsed = datetime.now() - self._last_consolidation
+            if elapsed < timedelta(hours=24):
+                return
+        try:
+            with self._conn() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM memories WHERE category != 'rejected'")
+                total = cursor.fetchone()[0]
+                if total > 500:
+                    print(f"   [-] Skipping consolidation ({total} memories — too many for O(n²))")
+                    return
+            self.consolidate()
+            self._last_consolidation = datetime.now()
+        except Exception as e:
+            print(f"   [!] Consolidation error: {e}")
+
     def consolidate(self):
         """Merge near-duplicate memories with >60% keyword overlap.
         Keeps the highest-confidence entry, rejects the rest."""
@@ -547,7 +552,8 @@ class LongTermMemory:
                             )
                             merged.add(reject[0])
                 conn.commit()
-            print(f"   [+] Consolidated {len(merged)} duplicate memories")
+            if merged:
+                print(f"   [+] Consolidated {len(merged)} duplicate memories")
         except Exception as e:
             print(f"   [!] Consolidation error: {e}")
 

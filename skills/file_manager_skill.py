@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -30,21 +31,6 @@ class FileManagerSkill(BaseSkill):
 
     def __init__(self):
         super().__init__()
-        self.name = "file_manager"
-        self.description = "Manage files: list, find, read, and organize"
-        self.keywords = [
-            "find file",
-            "search for file",
-            "list files",
-            "show files",
-            "what's in",
-            "read file",
-            "open file content",
-            "latest download",
-            "move file",
-            "copy file",
-            "delete file",
-        ]
 
     async def handle(self, text: str, context: dict[str, Any]) -> str:
         # Simple routing based on key phrases
@@ -146,14 +132,23 @@ class FileManagerSkill(BaseSkill):
             return f"Search error: {e}"
 
     def _handle_read(self, text: str, context: dict[str, Any]) -> str:
-        # Extract filename (simple heuristic)
-        words = text.split()
-        target_file = words[-1]  # Assume last word is filename for now
+        target_file = ""
+        m = re.search(r"(?:read|open|show|content of)\s+(?:the\s+|file\s+)?['\"]?(.+?)['\"]?\s*$", text, re.I)
+        if m:
+            target_file = m.group(1).strip()
+        if not target_file:
+            return "Which file should I read? (e.g. 'read notes.txt')"
 
-        # Determine path (assume current or try to find)
         p = Path(target_file)
         if not p.exists():
-            return f"I cannot find the file '{target_file}'."
+            # Try common directories
+            for base in [Path.home() / "Documents", Path.home() / "Desktop", Path.home() / "Downloads", Path.cwd()]:
+                candidate = base / target_file
+                if candidate.exists():
+                    p = candidate
+                    break
+            else:
+                return f"I cannot find the file '{target_file}'."
 
         try:
             if p.stat().st_size > 10000:

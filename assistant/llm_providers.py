@@ -20,6 +20,9 @@ from config import (
     OLLAMA_KEEP_ALIVE,
     OLLAMA_MODEL,
     OLLAMA_MODELS,
+    OPENCODE_API_KEY,
+    OPENCODE_BASE_URL,
+    OPENCODE_MODEL,
     OPENROUTER_MODEL,
 )
 
@@ -38,7 +41,7 @@ class OllamaProvider:
         if self._available is not None:
             return self._available
         try:
-            ollama.list()
+            ollama.Client(timeout=3.0).list()
             self._available = True
         except Exception:
             self._available = False
@@ -152,6 +155,22 @@ class OpenRouterProvider:
         return self._client
 
 
+class OpenCodeProvider:
+    """OpenCode AI cloud LLM provider"""
+
+    def __init__(self):
+        self._client: OpenAI | None = None
+
+    @property
+    def client(self) -> OpenAI | None:
+        if not self._client and OPENCODE_API_KEY:
+            self._client = OpenAI(
+                base_url=OPENCODE_BASE_URL,
+                api_key=OPENCODE_API_KEY,
+            )
+        return self._client
+
+
 class ProviderRegistry:
     """Registry for all LLM providers"""
 
@@ -162,6 +181,7 @@ class ProviderRegistry:
         self.nvidia = NvidiaProvider()
         self.gemini = GeminiProvider()
         self.openrouter = OpenRouterProvider()
+        self.opencode = OpenCodeProvider()
 
     def get_all_providers(self) -> list[dict[str, Any]]:
         return [
@@ -178,6 +198,13 @@ class ProviderRegistry:
                 "local": True,
                 "latency": "fast",
                 "reasoning": "medium",
+            },
+            {
+                "name": "OpenCode",
+                "provider": self.opencode,
+                "local": False,
+                "latency": "fast",
+                "reasoning": "high",
             },
             {
                 "name": "Groq",
@@ -595,6 +622,42 @@ async def chat_openrouter(
         user_message,
         history,
         "OpenRouter",
+        tools,
+        tool_discovery_top_k,
+        execute_tool_batch_fn,
+        discover_tools_fn,
+        initial_toolset_fn,
+        merge_tool_schemas_fn,
+        parse_tool_args_fn,
+        normalize_model_tool_call_fn,
+        compact_tool_fn,
+        tool_name_from_schema_fn,
+    )
+
+
+async def chat_opencode(
+    provider: OpenCodeProvider,
+    build_messages_fn,
+    user_message: str,
+    history: list[dict[str, str]],
+    tools: list[dict] = None,
+    tool_discovery_top_k: int = 3,
+    execute_tool_batch_fn=None,
+    discover_tools_fn=None,
+    initial_toolset_fn=None,
+    merge_tool_schemas_fn=None,
+    parse_tool_args_fn=None,
+    normalize_model_tool_call_fn=None,
+    compact_tool_fn=None,
+    tool_name_from_schema_fn=None,
+) -> str | None:
+    return await chat_openai_compatible(
+        provider.client,
+        OPENCODE_MODEL,
+        build_messages_fn,
+        user_message,
+        history,
+        "OpenCode",
         tools,
         tool_discovery_top_k,
         execute_tool_batch_fn,

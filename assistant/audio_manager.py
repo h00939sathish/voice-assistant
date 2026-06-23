@@ -2,6 +2,7 @@
 Audio Manager - Handles microphone input and speaker output
 """
 
+import logging
 import os
 import queue
 import sys
@@ -16,6 +17,8 @@ from assistant.interfaces import IAudioManager
 # Add parent to path for config
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import AUDIO_INPUT_DEVICE, CHANNELS, CHUNK_SIZE, SAMPLE_RATE
+
+logger = logging.getLogger("buddy.audio")
 
 
 class AudioManager(IAudioManager):
@@ -184,7 +187,7 @@ class AudioManager(IAudioManager):
             callback=self._audio_callback,
         )
         self._stream.start()
-        print("🎤 Audio stream started")
+        logger.info("🎤 Audio stream started")
 
     def stop_stream(self):
         """Stop the audio input stream"""
@@ -192,7 +195,7 @@ class AudioManager(IAudioManager):
             self._stream.stop()
             self._stream.close()
             self._stream = None
-            print("🎤 Audio stream stopped")
+            logger.info("🎤 Audio stream stopped")
 
     def start_recording(self):
         """Start recording audio to queue"""

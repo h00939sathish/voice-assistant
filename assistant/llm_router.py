@@ -25,6 +25,7 @@ from assistant.llm_providers import (
     chat_lmstudio,
     chat_nvidia,
     chat_ollama,
+    chat_opencode,
     chat_openrouter,
 )
 from assistant.personality import SYSTEM_PROMPT
@@ -341,9 +342,8 @@ class LLMRouter(ILLMProvider):
             try:
                 parsed = json.loads(text)
                 return parsed if isinstance(parsed, dict) else {"query": text}
-            except Exception as e:
-                print(f"   ⚠️ Tool argument parse error: {e}")
-                return {"_raw_arguments": text, "_parse_error": str(e)}
+            except json.JSONDecodeError:
+                return {"query": text}
         return {}
 
     def _fallback_tool_discovery(
@@ -695,6 +695,9 @@ class LLMRouter(ILLMProvider):
             elif pname == "OpenRouter":
                 available = p["provider"].client is not None
                 handler = self._chat_openrouter
+            elif pname == "OpenCode":
+                available = p["provider"].client is not None
+                handler = self._chat_opencode
             else:
                 continue
 
@@ -825,6 +828,26 @@ class LLMRouter(ILLMProvider):
         self, provider, build_messages_fn, user_message, history, tools, *args, **kwargs
     ):
         return await chat_openrouter(
+            provider,
+            build_messages_fn,
+            user_message,
+            history,
+            tools,
+            self._tool_discovery_top_k,
+            self._execute_tool_batch,
+            self._discover_tools,
+            self._initial_toolset,
+            self._merge_tool_schemas,
+            self._parse_tool_args,
+            self._normalize_model_tool_call,
+            self._compact_tool,
+            self._tool_name_from_schema,
+        )
+
+    async def _chat_opencode(
+        self, provider, build_messages_fn, user_message, history, tools, *args, **kwargs
+    ):
+        return await chat_opencode(
             provider,
             build_messages_fn,
             user_message,

@@ -59,16 +59,16 @@ class TestOllamaProvider:
     def test_ollama_model_names_getter(self, provider):
         assert isinstance(provider.model_names, list)
 
-    @patch("assistant.llm_providers.ollama")
-    def test_ollama_available_when_list_succeeds(self, mock_ollama, provider):
-        mock_ollama.list = MagicMock()
+    @patch("assistant.llm_providers.ollama.Client")
+    def test_ollama_available_when_list_succeeds(self, mock_client, provider):
+        mock_client.return_value.list = MagicMock()
         provider._available = None
         assert provider.available is True
-        mock_ollama.list.assert_called_once()
+        mock_client.return_value.list.assert_called_once()
 
-    @patch("assistant.llm_providers.ollama")
-    def test_ollama_unavailable_when_list_fails(self, mock_ollama, provider):
-        mock_ollama.list = MagicMock(side_effect=Exception("Connection failed"))
+    @patch("assistant.llm_providers.ollama.Client")
+    def test_ollama_unavailable_when_list_fails(self, mock_client, provider):
+        mock_client.return_value.list = MagicMock(side_effect=Exception("Connection failed"))
         provider._available = None
         assert provider.available is False
 
@@ -87,28 +87,28 @@ class TestLMStudioProvider:
         assert provider._available is None
         assert provider._client is None
 
-    @patch("assistant.llm_providers.requests")
+    @patch("requests.get")
     @patch("assistant.llm_providers.LMSTUDIO_HOST", "http://localhost:1234")
-    def test_lmstudio_available_when_request_succeeds(self, mock_requests, provider):
+    def test_lmstudio_available_when_request_succeeds(self, mock_get, provider):
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_requests.get.return_value = mock_response
+        mock_get.return_value = mock_response
         provider._available = None
         assert provider.available is True
 
-    @patch("assistant.llm_providers.requests")
+    @patch("requests.get")
     @patch("assistant.llm_providers.LMSTUDIO_HOST", "http://localhost:1234")
-    def test_lmstudio_unavailable_when_request_fails(self, mock_requests, provider):
-        mock_requests.get.side_effect = Exception("Connection refused")
+    def test_lmstudio_unavailable_when_request_fails(self, mock_get, provider):
+        mock_get.side_effect = Exception("Connection refused")
         provider._available = None
         assert provider.available is False
 
-    @patch("assistant.llm_providers.requests")
+    @patch("requests.get")
     @patch("assistant.llm_providers.LMSTUDIO_HOST", "http://localhost:1234")
-    def test_lmstudio_client_created_on_demand(self, mock_requests, provider):
+    def test_lmstudio_client_created_on_demand(self, mock_get, provider):
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_requests.get.return_value = mock_response
+        mock_get.return_value = mock_response
         provider._available = True
         client = provider.client
         assert client is not None

@@ -177,10 +177,10 @@ class TestParticle:
 
     def test_particle_stores_color_components(self, particle, mock_qcolor):
         """Test particle stores color RGB components."""
-        assert particle.color.red() == 100
-        assert particle.color.green() == 150
-        assert particle.color.blue() == 200
-        assert particle.color.alpha() == 255
+        assert particle.color.red == 100
+        assert particle.color.green == 150
+        assert particle.color.blue == 200
+        assert particle.color.alpha == 255
 
     def test_particle_update_moves_position(self, particle):
         """Test particle update moves x and y by velocity."""

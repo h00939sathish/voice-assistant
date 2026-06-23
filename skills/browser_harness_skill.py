@@ -57,7 +57,7 @@ class BrowserHarnessSkill(BaseSkill):
             return f"Error: {stderr[:500]}"
         return stdout
 
-    def get_tool_schemas(self):
+    def get_tool_schema(self):
         return [
             {
                 "type": "function",

@@ -54,12 +54,6 @@ WAKE_WORD_CUSTOM = os.getenv(
 # "tflite" uses ~100MB less RAM than "onnx"; fall back to "onnx" if tflite not available
 OWW_INFERENCE_FRAMEWORK = os.getenv("OWW_INFERENCE_FRAMEWORK", "tflite")
 
-# Porcupine settings
-PICOVOICE_ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY", "")
-# Path to custom .ppn file (relative to project root)
-PORCUPINE_KEYWORD_PATH = (
-    BASE_DIR / "HEY-JARVIS_en_windows_v4_0_0" / "HEY-JARVIS_en_windows_v4_0_0.ppn"
-)
 
 # STT settings (faster-whisper)
 # Use "tiny" to save ~300MB RAM vs "base". Accuracy is nearly identical for short commands.
@@ -88,6 +82,12 @@ MIN_SPEECH_DURATION_MS = int(
 )  # Minimum speech to accept
 MIN_COMMAND_CONFIDENCE = float(os.getenv("MIN_COMMAND_CONFIDENCE", "0.55"))
 
+# Session mode (continuous voice chat)
+SESSION_ENABLED = os.getenv("SESSION_ENABLED", "true").strip().lower() == "true"
+SESSION_IDLE_TIMEOUT = float(os.getenv("SESSION_IDLE_TIMEOUT", "15"))  # seconds of silence before ending session
+INTERRUPT_THRESHOLD = float(os.getenv("INTERRUPT_THRESHOLD", "0.03"))  # RMS energy threshold for interruption
+INTERRUPT_MS = int(os.getenv("INTERRUPT_MS", "300"))  # ms of speech to trigger interruption
+
 # LLM settings
 # Priority: local first (offline-capable) then cloud fallbacks
 _OLLAMA_MODELS_RAW = os.getenv(
@@ -109,11 +109,12 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = "gemini-2.0-flash"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL = (
-    "meta-llama/llama-3.1-8b-instruct:free"  # Reliably available free model
-)
+OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 NVIDIA_MODEL = "meta/llama-3.1-70b-instruct"  # Powerful model
+OPENCODE_API_KEY = os.getenv("OPENCODE_API_KEY", "")
+OPENCODE_BASE_URL = os.getenv("OPENCODE_BASE_URL", "https://opencode.ai/zen/v1")
+OPENCODE_MODEL = os.getenv("OPENCODE_MODEL", "deepseek-v4-flash-free")
 
 # Dynamic tool discovery keeps tool context small:
 # model sees only search_tools first, then gets a tiny relevant subset.

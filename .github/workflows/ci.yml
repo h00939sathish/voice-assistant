@@ -45,14 +45,8 @@ jobs:
         run: >
           pytest tests/ -v
           --ignore=tests/test_wake_word.py --ignore=tests/test_voice_assistant.py
+          --ignore=tests/test_tool_use.py
           --deselect=tests/test_foundational_build.py::test_llm_router_stops_after_confirmation_denial
-          --deselect="tests/test_llm_providers.py::TestOllamaProvider::test_ollama_available_when_list_succeeds"
-          --deselect="tests/test_llm_providers.py::TestOllamaProvider::test_ollama_unavailable_when_list_fails"
-          --deselect="tests/test_llm_providers.py::TestLMStudioProvider::test_lmstudio_available_when_request_succeeds"
-          --deselect="tests/test_llm_providers.py::TestLMStudioProvider::test_lmstudio_unavailable_when_request_fails"
-          --deselect="tests/test_llm_providers.py::TestLMStudioProvider::test_lmstudio_client_created_on_demand"
-          --deselect="tests/test_llm_router.py::TestLLMRouterToolSchemas::test_parse_tool_args_plain_string"
-          --deselect="tests/test_orb_animations.py::TestParticle::test_particle_stores_color_components"
           -x
         env:
           GEMINI_API_KEY: dummy

@@ -36,6 +36,35 @@ class AppController:
     Supports keyboard shortcuts, mouse clicks, and window management.
     """
 
+    APP_MAP = {
+        "chrome": "chrome",
+        "google chrome": "chrome",
+        "firefox": "firefox",
+        "edge": "msedge",
+        "brave": "brave",
+        "opera": "opera",
+        "visual studio code": "code",
+        "vs code": "code",
+        "vscode": "code",
+        "visual studio": "devenv",
+        "notepad": "notepad",
+        "calculator": "calc",
+        "file explorer": "explorer",
+        "explorer": "explorer",
+        "spotify": "spotify",
+        "discord": "discord",
+        "slack": "slack",
+        "terminal": "wt",
+        "powershell": "powershell",
+        "cmd": "cmd",
+        "task manager": "taskmgr",
+        "settings": "ms-settings:",
+        "paint": "mspaint",
+        "word": "winword",
+        "excel": "excel",
+        "powerpoint": "powerpnt",
+    }
+
     def __init__(self):
         self.system = platform.system()
         self.active_app: str | None = None
@@ -281,6 +310,58 @@ class AppController:
                 return f"Failed to launch {match}"
 
         return f"I couldn't find an app named '{app_name}'"
+
+    def launch_by_name(self, app_name: str) -> str:
+        """Launch an app: try AppScanner first, then APP_MAP, then direct."""
+        app_name_lower = app_name.lower().strip()
+
+        result = self.launch_app(app_name_lower)
+        if "couldn't find" not in result.lower():
+            return result
+
+        exe = None
+        for name, command in sorted(
+            self.APP_MAP.items(), key=lambda item: len(item[0]), reverse=True
+        ):
+            if name in app_name_lower:
+                exe = command
+                break
+
+        if exe:
+            try:
+                if exe.startswith("ms-"):
+                    os.startfile(exe)
+                else:
+                    subprocess.Popen(
+                        exe,
+                        shell=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                return f"Opening {app_name_lower.title()}."
+            except Exception as e:
+                return f"Failed to open {app_name_lower}: {e}"
+
+        try:
+            subprocess.Popen(
+                app_name_lower,
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return f"Trying to open {app_name_lower.title()}."
+        except Exception as e:
+            return f"I couldn't find or open '{app_name_lower}'. ({e})"
+
+    def keyboard_mute(self) -> str:
+        try:
+            if IS_WINDOWS:
+                ctypes.windll.user32.keybd_event(0xAD, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(0xAD, 0, 2, 0)
+                return "Toggled mute."
+            return "Mute is only supported on Windows."
+        except Exception as e:
+            return f"Failed to toggle mute: {e}"
 
     # ==================== Spotify Controls ====================
     def _spotify_play(self, **kwargs) -> str:

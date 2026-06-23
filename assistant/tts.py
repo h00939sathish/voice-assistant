@@ -67,7 +67,7 @@ class TextToSpeech(ITTSProvider):
                 if "female" in voice.name.lower() or "zira" in voice.name.lower():
                     self._pyttsx_engine.setProperty("voice", voice.id)
                     break
-            print("   ✅ Fallback TTS (pyttsx3) initialized")
+            logger.info("   ✅ Fallback TTS (pyttsx3) initialized")
 
     def _emit_health(self, state: str, detail: str = "") -> None:
         """Publish TTS subsystem health (best-effort)."""
@@ -393,7 +393,7 @@ class TextToSpeech(ITTSProvider):
                 args = ["ffplay", "-nodisp", "-autoexit", "-"]
 
             if not player:
-                print("   ⚠️ No streaming player (mpv/ffplay) found, buffering...")
+                logger.warning("   ⚠️ No streaming player (mpv/ffplay) found, buffering...")
                 # Fallback to buffering
                 audio_chunks = []
                 async for chunk in self.synthesize_streaming(text):
@@ -462,16 +462,16 @@ def test_tts():
     """Test TTS"""
     tts = TextToSpeech()
 
-    print("\n🔊 Testing edge-tts (online)...")
+    logger.info("\n🔊 Testing edge-tts (online)...")
     tts.speak(
         "Hello! I'm Buddy, your friendly voice assistant. How can I help you today?"
     )
 
-    print("\n🔊 Testing fallback (offline)...")
+    logger.info("\n🔊 Testing fallback (offline)...")
     tts._use_fallback = True
     tts.speak("This is the offline fallback voice.")
 
-    print("\n✅ TTS test complete!")
+    logger.info("\n✅ TTS test complete!")
 
 
 if __name__ == "__main__":

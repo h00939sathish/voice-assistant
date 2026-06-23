@@ -3,6 +3,7 @@ Wake Word Detection using openWakeWord or Porcupine
 """
 
 import importlib.util
+import logging
 import os
 import sys
 import threading
@@ -23,6 +24,10 @@ from config import (
     WAKE_WORD_SCORE_LOG_INTERVAL_MS,
     WAKE_WORD_THRESHOLD,
 )
+
+
+
+logger = logging.getLogger("buddy.wake_word")
 
 
 class WakeWordDetector:
@@ -68,7 +73,7 @@ class WakeWordDetector:
                 return
 
             # 1. openWakeWord (tflite preferred, onnx fallback for lower RAM)
-            print("🔄 Loading openWakeWord engine (Primary)...")
+            logger.info("🔄 Loading openWakeWord engine (Primary)...")
             try:
                 import warnings
 
@@ -134,7 +139,7 @@ class WakeWordDetector:
                         inference_framework="onnx",
                     )
                     self._is_loaded = True
-                    print("✅ openWakeWord loaded: 'alexa_v0.1' (last resort)")
+                    logger.info("✅ openWakeWord loaded: 'alexa_v0.1' (last resort)")
                     return
                 except Exception as e2:
                     print(f"⚠️ alexa fallback failed: {e2}")
@@ -143,7 +148,7 @@ class WakeWordDetector:
                 print(f"❌ openWakeWord critical failure: {e}")
 
             # 2. Vosk (Reliable Speech-to-Text Fallback)
-            print("🔄 Loading Vosk engine (Fallback)...")
+            logger.info("🔄 Loading Vosk engine (Fallback)...")
             try:
                 from vosk import KaldiRecognizer, Model, SetLogLevel
 
@@ -152,7 +157,7 @@ class WakeWordDetector:
                 try:
                     self.vosk_model = Model(model_name="vosk-model-small-en-us-0.15")
                 except Exception:
-                    print("   Downloading Vosk model...")
+                    logger.info("   Downloading Vosk model...")
                     self.vosk_model = Model(lang="en-us")
 
                 self.vosk_rec = KaldiRecognizer(
@@ -160,12 +165,12 @@ class WakeWordDetector:
                 )
                 self.use_vosk = True
                 self._is_loaded = True
-                print("✅ Vosk loaded! (Keyword: 'hey jarvis')")
+                logger.info("✅ Vosk loaded! (Keyword: 'hey jarvis')")
                 return
             except Exception as e:
                 print(f"⚠️ Vosk failed: {e}")
 
-            print("❌ All wake word engines failed to load.")
+            logger.error("❌ All wake word engines failed to load.")
 
     def process_audio(self, audio_chunk: bytes) -> bool:
         """Process audio chunk (will auto-load if not ready)"""
@@ -192,7 +197,7 @@ class WakeWordDetector:
         if self.vosk_rec.AcceptWaveform(audio_chunk):
             res = self.vosk_rec.Result()
             if "hey jarvis" in res:
-                print("🎯 Wake word detected (Vosk)!")
+                logger.info("🎯 Wake word detected (Vosk)!")
                 if self.on_wake:
                     self.on_wake()
                 return True
@@ -272,7 +277,7 @@ def test_wake_word():
     def on_wake():
         nonlocal detected
         detected = True
-        print("🎉 WAKE WORD DETECTED!")
+        logger.info("🎉 WAKE WORD DETECTED!")
 
     detector = WakeWordDetector(on_wake=on_wake)
     detector.load_model()
@@ -281,8 +286,8 @@ def test_wake_word():
     audio.start_stream()
     audio.start_recording()
 
-    print("\n👂 Listening for 'Hey Jarvis'... (10 seconds)")
-    print("   Say the wake word to test detection.\n")
+    logger.info("\n👂 Listening for 'Hey Jarvis'... (10 seconds)")
+    logger.info("   Say the wake word to test detection.\n")
 
     start = time.time()
     while time.time() - start < 10 and not detected:
@@ -294,9 +299,9 @@ def test_wake_word():
     audio.stop_stream()
 
     if detected:
-        print("✅ Test passed!")
+        logger.info("✅ Test passed!")
     else:
-        print("❌ No wake word detected in 10 seconds")
+        logger.warning("❌ No wake word detected in 10 seconds")
 
 
 if __name__ == "__main__":

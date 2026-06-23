@@ -65,7 +65,6 @@ _BUILTIN_TOOL_RISK_MAP: dict[str, RiskLevel] = {
     "time": RiskLevel.LOW,
     "search_web": RiskLevel.LOW,
     "search_tools": RiskLevel.LOW,
-    "screen_awareness": RiskLevel.LOW,
     "memory_control": RiskLevel.LOW,
     "google_search": RiskLevel.LOW,
     "news": RiskLevel.LOW,
@@ -77,25 +76,24 @@ _BUILTIN_TOOL_RISK_MAP: dict[str, RiskLevel] = {
     "browser_navigate": RiskLevel.LOW,
     "browser_extract_text": RiskLevel.LOW,
     # MEDIUM — state changes that are reversible
+    "computer_use": RiskLevel.MEDIUM,
+    "launch_app": RiskLevel.MEDIUM,
+    "control_window": RiskLevel.MEDIUM,
+    "system_action": RiskLevel.MEDIUM,
+    "screen_question": RiskLevel.LOW,
     "spotify_play": RiskLevel.MEDIUM,
     "spotify_pause": RiskLevel.MEDIUM,
     "spotify_next": RiskLevel.MEDIUM,
     "set_volume": RiskLevel.MEDIUM,
     "open_app": RiskLevel.MEDIUM,
-    "launch_app": RiskLevel.MEDIUM,
     "set_reminder": RiskLevel.MEDIUM,
-    "app_integration": RiskLevel.MEDIUM,
     "browser": RiskLevel.MEDIUM,
     "browser_click": RiskLevel.MEDIUM,
     "browser_type": RiskLevel.MEDIUM,
     "calendar": RiskLevel.MEDIUM,
     "clipboard": RiskLevel.MEDIUM,
     "file_manager": RiskLevel.MEDIUM,
-    "quick_actions": RiskLevel.MEDIUM,
     "reminder": RiskLevel.MEDIUM,
-    "system": RiskLevel.MEDIUM,
-    "vision": RiskLevel.MEDIUM,
-    "window_manager": RiskLevel.MEDIUM,
     # HIGH — system changes or data modifications
     "run_command": RiskLevel.HIGH,
     "execute_command": RiskLevel.HIGH,
@@ -111,6 +109,7 @@ _BUILTIN_TOOL_RISK_MAP: dict[str, RiskLevel] = {
     "uninstall": RiskLevel.CRITICAL,
     "shutdown_system": RiskLevel.CRITICAL,
     "restart_system": RiskLevel.CRITICAL,
+    "close_window": RiskLevel.HIGH,
 }
 
 _LOW_RISK_HINTS = (
@@ -154,7 +153,6 @@ _HIGH_RISK_HINTS = (
     "email",
     "copy",
     "paste",
-    "close window",
     "force close",
     "run command",
     "execute command",
@@ -178,8 +176,7 @@ _CONTEXTUAL_OVERRIDE_TOOLS = {
     "clipboard",
     "file_manager",
     "reminder",
-    "window_manager",
-    "vision",
+    "computer_use",
 }
 
 # Patterns in arguments that escalate risk to CRITICAL
@@ -419,24 +416,28 @@ class AuthorityGate:
             ):
                 return RiskLevel.MEDIUM
 
-        if tool_name == "window_manager":
-            if "force close" in signals or "close active window" in signals:
-                return RiskLevel.HIGH
-            if any(
-                word in signals
-                for word in (
-                    "minimize",
-                    "maximize",
-                    "restore",
-                    "switch to",
-                    "focus on",
-                    "show desktop",
-                )
-            ):
+        if tool_name == "computer_use":
+            cmd = (args or {}).get("command", "")
+            if cmd == "":
+                return _match_hint_risk(signals)
+            if cmd in ("screen_question",):
+                return RiskLevel.LOW
+            if cmd == "system_action":
+                action = (args or {}).get("action", "")
+                if action in ("shutdown", "restart"):
+                    return RiskLevel.CRITICAL
                 return RiskLevel.MEDIUM
-
-        if tool_name == "vision":
-            if "screen" in signals or "screenshot" in signals:
+            if cmd == "control_window":
+                action = (args or {}).get("action", "")
+                if action == "close":
+                    return RiskLevel.HIGH
+                return RiskLevel.MEDIUM
+            if cmd == "accessibility":
+                uia_action = (args or {}).get("uia_action", "")
+                if uia_action in ("list", "find", "info", "wait_for"):
+                    return RiskLevel.LOW
+                return RiskLevel.MEDIUM
+            if cmd in ("launch_app", "app_command", "keyboard"):
                 return RiskLevel.MEDIUM
 
         return _match_hint_risk(signals)
