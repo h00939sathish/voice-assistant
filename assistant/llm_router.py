@@ -20,6 +20,7 @@ from assistant.llm_cache import LLMResponseCache
 from assistant.llm_fallback import FallbackChain, FallbackConfig, determine_intent
 from assistant.llm_providers import (
     ProviderRegistry,
+    chat_freellmapi,
     chat_gemini,
     chat_groq,
     chat_lmstudio,
@@ -698,6 +699,9 @@ class LLMRouter(ILLMProvider):
             elif pname == "OpenCode":
                 available = p["provider"].client is not None
                 handler = self._chat_opencode
+            elif pname == "FreeLLMAPI":
+                available = p["provider"].client is not None
+                handler = self._chat_freellmapi
             else:
                 continue
 

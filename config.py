@@ -123,6 +123,11 @@ DYNAMIC_TOOL_DISCOVERY_ENABLED = os.getenv(
 ).lower() in {"1", "true", "yes"}
 DYNAMIC_TOOL_DISCOVERY_TOP_K = int(os.getenv("DYNAMIC_TOOL_DISCOVERY_TOP_K", "8"))
 
+# FreeLLMAPI proxy (OpenAI-compatible proxy)
+FREELLMAPI_API_KEY = os.getenv("FREELLMAPI_API_KEY", "")
+FREELLMAPI_BASE_URL = os.getenv("FREELLMAPI_BASE_URL", "http://127.0.0.1:3001/v1")
+FREELLMAPI_MODEL = os.getenv("FREELLMAPI_MODEL", "auto")
+
 # LM Studio settings (local OpenAI-compatible API)
 LMSTUDIO_HOST = os.getenv("LMSTUDIO_HOST", "http://localhost:1234/v1")
 LMSTUDIO_MODEL = os.getenv("LMSTUDIO_MODEL", "falcon-h1r-7b")  # Model name in LM Studio

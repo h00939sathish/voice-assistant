@@ -10,10 +10,786 @@
 </head>
 <body>
   <div id="root"></div>
-
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script type="text/babel" src="/static/app.js"></script>
+{% raw %}
+<script>
+const store = {
+  state: 'idle', messages: [], thinking: null,
+  metrics: { cpu:0, ram:0, gpu:0, vram:0, disk:0, network:0, gpu_temp:0,
+             gpu_power:0, gpu_fan:0, gpu_name:'', vram_used:0, vram_total:4,
+             cpu_temp:0, uptime:'', processes:0 },
+  providers: [{name:'Ollama',status:'offline'},{name:'OpenRouter',status:'online'},{name:'Gemini',status:'online'},{name:'Groq',status:'online'},{name:'NVIDIA',status:'online'}],
+  memory: { name:'Sathish', projects:['JARVIS','Trading System V4'], recent:['Uses MSI Thin 15','Works with OpenBB','Uses Railway'], pinned:[] },
+  agentLog: [{ts:'08:21',msg:'OpenBB Scan Completed'},{ts:'08:23',msg:'Memory Updated'},{ts:'08:24',msg:'DeepSeek Response Generated'},{ts:'08:25',msg:'Railway Health Check Passed'},{ts:'08:26',msg:'Research Report Created'}],
+  automations: [{id:'1',name:'Trading Monitor',status:'running'},{id:'2',name:'Daily Research Scan',status:'scheduled'},{id:'3',name:'System Backup',status:'completed'},{id:'4',name:'Railway Health Check',status:'running'}],
+  alerts: [{type:'warning',message:'Gemini quota at 85%'},{type:'info',message:'Railway deployment completed'}],
+  model: { name:'DeepSeek V4 Pro', provider:'NVIDIA', context:'1M', latency:'2.3s', tokens:'4.2K' },
+  conversations: [
+    {title:'OpenBB Research', ts:'5 min ago', cat:'Research'},
+    {title:'Railway Deployment Review', ts:'20 min ago', cat:'DevOps'},
+    {title:'Memory Optimization', ts:'1 hour ago', cat:'System'},
+    {title:'Trading Strategy Analysis', ts:'2 hours ago', cat:'Finance'},
+    {title:'Code Review: Agent Pipeline', ts:'3 hours ago', cat:'Development'},
+  ],
+  cmdOpen: false, cmdQuery: '', cmdIndex: -1, listeners: new Set(),
+  objective: { id:'obj_1', title:'Research Trading Opportunities', progress:0,
+               step:'Initializing', status:'idle', eta:'', steps:[] },
+  tasks: [],
+  agents: [],
+  ecosystem: { railway:{status:'unknown'}, api:{status:'unknown'},
+               broker:{status:'unknown'}, openbb:{status:'unknown'},
+               position_registry:{status:'unknown'}, event_bus:{status:'unknown'},
+               last_strategy_run:'', last_trade:'',
+               system_latency:{current:0,average:0,peak:0} },
+  routing: { router:{name:'Ternary Bonsai 8B',status:'active'},
+             primary:{name:'DeepSeek V4 Pro',status:'standby',tokens:0},
+             fallback:{name:'GLM 5.1',status:'standby',tokens:0},
+             last_route:'router', total_routes:0 },
+  audioLevel: 0,
+};
+
+function setState(k, v) {
+  if (typeof k === 'object') Object.assign(store, k);
+  else store[k] = v;
+  store.listeners.forEach(f => f());
+}
+function subscribe(f) { store.listeners.add(f); return () => store.listeners.delete(f); }
+
+async function api(p, b) {
+  const o = { headers: { 'Content-Type': 'application/json' } };
+  if (b) { o.method = 'POST'; o.body = JSON.stringify(b); }
+  try { const r = await fetch(p, o); return r.json(); } catch { return {}; }
+}
+
+async function sendMessage(text) {
+  if (!text.trim()) return;
+  setState('messages', store.messages.concat({role:'user',text:text.trim(),ts:Date.now()}));
+  const inp = document.getElementById('chat-input');
+  if (inp) inp.value = '';
+  setState('thinking', { text:'Thinking...' });
+  setState('objective', { ...store.objective, status:'processing', step:'Generating response...', progress:45 });
+  try {
+    const res = await api('/api/chat', { message: text.trim(), speak: false });
+    setState('thinking', null);
+    if (res.ok) {
+      setState('messages', store.messages.concat({role:'assistant',text:res.response,ts:Date.now()}));
+      setState('objective', { ...store.objective, status:'idle', progress:100, step:'Complete' });
+    } else {
+      setState('messages', store.messages.concat({role:'assistant',text:'Error: '+(res.error||'Unknown'),ts:Date.now()}));
+      setState('objective', { ...store.objective, status:'failed', step:'Error: '+res.error });
+    }
+  } catch(e) {
+    setState('thinking', null);
+    setState('messages', store.messages.concat({role:'assistant',text:'Connection error: '+e.message,ts:Date.now()}));
+    setState('objective', { ...store.objective, status:'failed', step:'Connection error' });
+  }
+}
+
+async function fetchInitial() {
+  try { const s = await api('/api/status'); if (s.state) setState('state', s.state);
+    if (s.objective) setState('objective', s.objective);
+    if (s.tasks) setState('tasks', s.tasks);
+    if (s.agents) setState('agents', s.agents);
+  } catch {}
+  try { const m = await api('/api/memory'); if (m && m.name) setState('memory', m); } catch {}
+  try { const a = await api('/api/automations'); if (Array.isArray(a) && a.length) setState('automations', a); } catch {}
+  try { const a = await api('/api/alerts'); if (Array.isArray(a)) setState('alerts', a); } catch {}
+  try { const l = await api('/api/agent/log'); if (Array.isArray(l)) setState('agentLog', l); } catch {}
+  try { const eco = await api('/api/ecosystem'); if (eco && eco.railway) setState('ecosystem', eco); } catch {}
+  try { const r = await api('/api/routing'); if (r && r.router) setState('routing', r); } catch {}
+}
+
+function connectMetricsSSE() {
+  const es = new EventSource('/api/metrics/stream');
+  es.onmessage = e => {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.type === 'metrics' && d.data) setState('metrics', d.data);
+    } catch {}
+  };
+  es.onerror = () => { es.close(); setTimeout(connectMetricsSSE, 5000); };
+}
+
+function connectSSE() {
+  const es = new EventSource('/stream');
+  es.onmessage = e => {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.state) setState('state', d.state);
+      if (d.metrics) setState('metrics', d.metrics);
+      if (d.providers) setState('providers', d.providers);
+      if (d.memory) setState('memory', d.memory);
+      if (d.agent_log) setState('agentLog', store.agentLog.concat(d.agent_log).slice(-50));
+      if (d.automation) setState('automations', store.automations.filter(a=>a.id!==d.automation.id).concat(d.automation));
+      if (d.alert) setState('alerts', store.alerts.concat(d.alert).slice(-20));
+      if (d.transcript) setState('messages', store.messages.concat({role:d.transcript.speaker==='user'?'user':'assistant',text:d.transcript.text,ts:Date.now()}).slice(-100));
+      if (d.objective) setState('objective', d.objective);
+      if (d.tasks) setState('tasks', d.tasks);
+      if (d.agents) setState('agents', d.agents);
+      if (d.routing) setState('routing', d.routing);
+    } catch {}
+  };
+  es.onerror = () => { es.close(); setTimeout(connectSSE, 5000); };
+}
+
+/* ── Orb Canvas Booster ───────────── */
+function initOrb() {
+  const c = document.getElementById('orb-canvas');
+  if (!c) return;
+  const ctx = c.getContext('2d');
+  let w, h, cx, cy, r = 40, ph = 0, al = 0, hv = false;
+  let pts = [], lb = 0, t = 0;
+
+  function sz() {
+    const s = Math.min(c.parentElement.getBoundingClientRect().width, 140);
+    const dpr = window.devicePixelRatio || 1;
+    c.width = s * dpr; c.height = s * dpr;
+    c.style.width = s + 'px'; c.style.height = s + 'px';
+    ctx.scale(dpr, dpr);
+    w = s; h = s; cx = w/2; cy = h/2; r = w * 0.32;
+  }
+  sz();
+  window.addEventListener('resize', sz);
+  c.addEventListener('mouseenter', () => hv = true);
+  c.addEventListener('mouseleave', () => hv = false);
+
+  function burst(n, hue) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, spd = 0.5 + Math.random() * 1.5;
+      const h = hue || (store.state === 'listening' ? 210 : store.state === 'speaking' ? 170 : store.state === 'error' ? 0 : store.state === 'thinking' ? 45 : 220);
+      const p = { x:cx, y:cy, vx:Math.cos(a)*spd, vy:Math.sin(a)*spd, life:0.3+Math.random()*0.7, ml:0, sz:1+Math.random()*3, r:h, g:h+40, b:255, a:1 };
+      p.ml = p.life; pts.push(p);
+    }
+  }
+  function upd(dt) {
+    for (let i = pts.length-1; i >= 0; i--) {
+      const p = pts[i]; p.x += p.vx; p.y += p.vy; p.vx *= 0.97; p.vy *= 0.97; p.life -= dt; p.a = Math.max(0, p.life/p.ml);
+      if (p.life <= 0) pts.splice(i, 1);
+    }
+    const n = Date.now();
+    if (store.state === 'listening' && n-lb > 150) { burst(2 + Math.floor(store.audioLevel * 3)); lb = n; }
+    if (store.state === 'speaking' && n-lb > 200) { burst(3 + Math.floor(store.audioLevel * 2)); lb = n; }
+    if (store.state === 'thinking' && n-lb > 250) { burst(1); lb = n; }
+    if (store.state === 'error' && n-lb > 300) { burst(5, 0); lb = n; }
+  }
+  function gc(s) {
+    switch(s) {
+      case'listening':return[59,130,246,0.3,0.7];
+      case'thinking':return[245,158,11,0.25,0.5];
+      case'speaking':return[45,212,191,0.25,0.8];
+      case'error':return[239,68,68,0.3,0.4];
+      case'sleeping':return[100,100,130,0.08,0.15];
+      case'offline':return[74,72,104,0.05,0.1];
+      default:return[100,100,130,0.15,0.3];
+    }
+  }
+  function dr(ts) {
+    const dt = Math.min((ts - (t || ts)) / 1000, 0.05);
+    t = ts;
+    const speedMap = { thinking:2.5, listening:1.2, speaking:1.8, error:3, sleeping:0.3, offline:0.1 };
+    ph += dt * (speedMap[store.state] || 0.5);
+    const clr = gc(store.state);
+    const pls = 1 + Math.sin(ph*2) * clr[4] * 0.12;
+    const rr = r * pls + Math.min(store.audioLevel, 1) * 12;
+    const a = clr[0], b = clr[1], c2 = clr[2];
+
+    ctx.clearRect(0, 0, w, h);
+
+    for (let i = 0; i < 3; i++) {
+      ctx.strokeStyle = 'rgba('+a+','+b+','+c2+','+(0.08-i*0.02)+')';
+      ctx.lineWidth = 1;
+      const rr2 = rr * (0.7 + i*0.25) + Math.sin(ph*1.5 + i*1.2) * 3;
+      ctx.beginPath(); ctx.arc(cx, cy, rr2, 0, Math.PI*2); ctx.stroke();
+    }
+
+    const grad = ctx.createRadialGradient(cx, cy, rr*0.2, cx, cy, rr*2.5);
+    grad.addColorStop(0, 'rgba('+a+','+b+','+c2+','+clr[3]+')');
+    grad.addColorStop(0.5, 'rgba('+a+','+b+','+c2+','+clr[3]*0.3+')');
+    grad.addColorStop(1, 'transparent');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(cx, cy, rr*2.5, 0, Math.PI*2); ctx.fill();
+
+    const core = ctx.createRadialGradient(cx-rr*0.2, cy-rr*0.2, 0, cx, cy, rr);
+    core.addColorStop(0, 'rgba('+a+','+b+','+c2+',0.9)');
+    core.addColorStop(0.4, 'rgba('+a+','+b+','+c2+',0.5)');
+    core.addColorStop(0.8, 'rgba('+a+','+b+','+c2+',0.15)');
+    core.addColorStop(1, 'transparent');
+    ctx.fillStyle = core;
+    ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI*2); ctx.fill();
+
+    const bri = ctx.createRadialGradient(cx-rr*0.15, cy-rr*0.15, 0, cx, cy, rr*0.5);
+    bri.addColorStop(0, 'rgba(255,255,255,'+(0.25+Math.min(store.audioLevel,1)*0.2)+')');
+    bri.addColorStop(1, 'transparent');
+    ctx.fillStyle = bri;
+    ctx.beginPath(); ctx.arc(cx, cy, rr*0.5, 0, Math.PI*2); ctx.fill();
+
+    upd(dt);
+    for (const p of pts) {
+      ctx.globalAlpha = p.a;
+      ctx.fillStyle = 'rgba('+p.r+','+p.g+','+p.b+','+p.a+')';
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.sz*p.a, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    if (hv) {
+      ctx.fillStyle = 'rgba('+a+','+b+','+c2+',0.05)';
+      ctx.beginPath(); ctx.arc(cx, cy, rr*1.5, 0, Math.PI*2); ctx.fill();
+    }
+    requestAnimationFrame(dr);
+  }
+  requestAnimationFrame(dr);
+}
+
+/* ── React Components ─────────────── */
+const { useState, useEffect, useRef, useCallback } = React;
+const h = React.createElement;
+
+function useStore() {
+  const [,up] = useState(0);
+  useEffect(() => { const u = subscribe(() => up(n=>n+1)); return u; }, []);
+}
+
+function DashMascot({ state }) {
+  const s = state === 'sleeping' || state === 'offline' ? 'idle' : state;
+  return h('svg', { id:'mascot-svg', className:'state-'+s, viewBox:'0 0 100 100', width:100, height:100 },
+    h('circle', { cx:50, cy:50, r:45, className:'mascot-ambient' }),
+    h('circle', { cx:50, cy:50, r:42, className:'mascot-orbit-outer' }),
+    h('polygon', { points:'50,14 84,32 84,68 50,86 16,68 16,32', className:'mascot-head' }),
+    h('polygon', { points:'50,22 76,37 76,63 50,78 24,63 24,37', className:'mascot-face' }),
+    h('g', { className:'mascot-eye-group left' },
+      h('polygon', { points:'26,44 38,40 38,54 26,58', className:'mascot-eye' }),
+      h('ellipse', { cx:32, cy:49, rx:7, ry:4, className:'mascot-eye-glow' })
+    ),
+    h('g', { className:'mascot-eye-group right' },
+      h('polygon', { points:'62,40 74,44 74,58 62,54', className:'mascot-eye' }),
+      h('ellipse', { cx:68, cy:49, rx:7, ry:4, className:'mascot-eye-glow' })
+    ),
+    h('circle', { cx:50, cy:26, r:2.5, className:'mascot-crown' }),
+    h('line', { x1:24, y1:42, x2:16, y2:40, className:'mascot-accent' }),
+    h('line', { x1:24, y1:58, x2:16, y2:60, className:'mascot-accent' }),
+    h('line', { x1:76, y1:42, x2:84, y2:40, className:'mascot-accent' }),
+    h('line', { x1:76, y1:58, x2:84, y2:60, className:'mascot-accent' }),
+    h('g', { className:'mascot-voice' },
+      h('line', { x1:38, y1:68, x2:44, y2:68 }),
+      h('line', { x1:46, y1:66, x2:54, y2:66 }),
+      h('line', { x1:56, y1:68, x2:62, y2:68 })
+    )
+  );
+}
+
+function App() {
+  useStore();
+  return h(React.Fragment, null,
+    h(LeftPanel), h(CenterPanel), h(RightPanel),
+    store.cmdOpen && h(CommandPalette)
+  );
+}
+
+/* ── Left Panel ──────────────────── */
+function LeftPanel() {
+  const s = store.state;
+  const badge = ['idle','listening','thinking','speaking','error','sleeping','offline'].includes(s) ? s : 'idle';
+  return h('div', { className:'panel panel-left' },
+    h(MascotSection, { state:s, badge }),
+    h(VoiceStatus, { state:s }),
+    h(EnhancedTaskQueue)
+  );
+}
+
+function MascotSection({ state, badge }) {
+  return h('div', { className:'glass', style:{textAlign:'center',padding:'14px 14px 10px'} },
+    h('div', { id:'mascot-container' },
+      h(DashMascot, { state }),
+      h('canvas', { id:'orb-canvas' })
+    ),
+    h('div', { style:{marginTop:4,display:'flex',justifyContent:'center',gap:6,alignItems:'center'} },
+      h('span', { className:'badge '+badge }, badge.charAt(0).toUpperCase()+badge.slice(1))
+    ),
+    h(LiveObjective)
+  );
+}
+
+function LiveObjective() {
+  const obj = store.objective || {};
+  const title = obj.title || 'Monitoring system…';
+  const status = obj.status || 'idle';
+  const progress = obj.progress || 0;
+  const step = obj.step || '';
+  const color = status === 'processing' || status === 'running' ? 'var(--blue)' :
+                status === 'failed' ? 'var(--red)' :
+                status === 'completed' ? 'var(--green)' : 'var(--muted)';
+  return h('div', { className:'objective', style:{marginTop:6} },
+    h('span', { className:'label', style:{fontSize:'8px'} }, 'Current Focus'),
+    h('span', { style:{fontSize:'11px',color: status==='idle'?'var(--muted)':'var(--text)'} }, title),
+    status !== 'idle' && status !== 'completed' ? h('div', { style:{marginTop:4,fontSize:'9px',color} },
+      step ? h('span', null, step) : null,
+      h('div', { style:{marginTop:2,display:'flex',alignItems:'center',gap:6} },
+        h('div', { style:{flex:1,height:2,background:'var(--border)',borderRadius:1,overflow:'hidden'} },
+          h('div', { style:{width:Math.min(progress,100)+'%',height:'100%',background:color,borderRadius:1,transition:'width 0.5s ease'} })
+        ),
+        h('span', { style:{fontSize:'8px',color:'var(--muted)',fontFamily:'var(--font-mono)'} }, Math.round(progress)+'%')
+      )
+    ) : null,
+    status === 'failed' ? h('span', { style:{fontSize:'9px',color:'var(--red)',display:'block',marginTop:2} }, '⚠ Failed') : null,
+    status === 'completed' ? h('span', { style:{fontSize:'9px',color:'var(--green)',display:'block',marginTop:2} }, '✓ Complete') : null
+  );
+}
+
+function VoiceStatus({ state }) {
+  const ok = state !== 'error' && state !== 'offline';
+  return h('div', { className:'glass' },
+    h('div', { className:'sec-title' }, h('span', { className:'dot' }), 'Voice'),
+    h('div', { className:'status-grid' },
+      h('span', { className:'label' }, 'Wake Word'), h('span', { className:'value' }, 'Jarvis'),
+      h('span', { className:'label' }, 'Mic'), h('span', { className:'value '+(ok?'online':'offline') }, ok?'Connected':'Disconnected'),
+      h('span', { className:'label' }, 'TTS'), h('span', { className:'value '+(ok?'online':'offline') }, ok?'Online':'Offline'),
+      h('span', { className:'label' }, 'STT'), h('span', { className:'value '+(ok?'online':'offline') }, ok?'Online':'Offline'),
+      h('span', { className:'label' }, 'State'), h('span', { className:'value '+state }, state)
+    )
+  );
+}
+
+function EnhancedTaskQueue() {
+  const tasks = store.tasks.length ? store.tasks : [
+    {id:'t1',label:'OpenBB Scan',status:'pending',agent:'Research',ts:'',duration:'',priority:'high'},
+    {id:'t2',label:'Railway Health Check',status:'pending',agent:'Monitoring',ts:'',duration:'',priority:'medium'},
+    {id:'t3',label:'Memory Cleanup',status:'pending',agent:'Memory',ts:'',duration:'',priority:'low'},
+    {id:'t4',label:'Daily Security Scan',status:'scheduled',agent:'Security',ts:'',duration:'',priority:'medium'},
+  ];
+  const icons = { running:'●', completed:'✓', scheduled:'⏳', failed:'⚠', cancelled:'✕', waiting:'○', pending:'○' };
+  return h('div', { className:'glass', style:{flex:1} },
+    h('div', { className:'sec-title' }, h('span', { className:'dot' }), 'Tasks'),
+    h('div', { style:{maxHeight:160,overflowY:'auto'} },
+      tasks.length === 0
+        ? h('div', { className:'empty-state' }, h('div', { className:'icon' }, '○'), h('div', null, 'No tasks'))
+        : tasks.map(t => {
+            const icon = icons[t.status] || '○';
+            const dotColor = t.status === 'running' ? 'var(--blue)' :
+                             t.status === 'completed' ? 'var(--green)' :
+                             t.status === 'failed' ? 'var(--red)' :
+                             t.status === 'scheduled' ? 'var(--amber)' : 'var(--muted)';
+            return h('div', { className:'task-item', key:t.id },
+              h('span', { style:{color:dotColor,fontSize:'10px'} }, icon),
+              h('span', { className:'task-label', style:{flex:1} }, t.label),
+              t.agent ? h('span', { style:{fontSize:'8px',color:'var(--muted)'} }, t.agent) : null,
+              t.duration ? h('span', { style:{fontSize:'8px',color:'var(--muted)',fontFamily:'var(--font-mono)'} }, t.duration) : null
+            );
+          })
+    )
+  );
+}
+
+/* ── Center Panel ────────────────── */
+function CenterPanel() {
+  return h('div', { className:'panel-center' },
+    store.messages.length === 0 ? h(MissionControl) : h(Messages),
+    h(ThinkingIndicator),
+    h(QuickActions),
+    h(InputArea)
+  );
+}
+
+function MissionControl() {
+  const acts = ['Research Market','Analyze Repo','Review Memory','Generate Report','Create Automation','Check OpenBB','Monitor Railway','Research Deep'];
+  const icons = ['🔍','📄','🧠','📊','⚙️','📈','🚀','🔬'];
+  return h('div', { className:'home-scroll' },
+    /* Today / Objective Card */
+    h('div', { className:'home-obj' },
+      h('div', { className:'home-obj-state '+(store.objective.status === 'idle' || !store.objective.status ? 'idle' : 'running') }),
+      h('div', { className:'home-obj-text' },
+        h('div', { className:'title' }, store.objective.title || 'System Idle — Monitoring'),
+        h('div', { className:'meta' }, 'Status: '+(store.objective.status || store.state)+
+          (store.objective.step ? '  ·  '+store.objective.step : ''))
+      ),
+      store.objective.progress > 0 ? h('div', { style:{textAlign:'right'} },
+        h('div', { style:{fontSize:'18px',fontWeight:700,color:'var(--blue)',fontFamily:'var(--font-display)'} },
+          Math.round(store.objective.progress)+'%'),
+        h('div', { style:{fontSize:'8px',color:'var(--muted)'} }, 'Progress')
+      ) : null
+    ),
+    /* Active Agents */
+    h('div', null,
+      h('div', { className:'home-section-title' }, h('span', { className:'bar' }), 'Active Agents'),
+      h('div', { className:'agent-grid' },
+        (store.agents.length ? store.agents : [
+          {name:'Research Agent',status:'idle',icon:'🔍'},
+          {name:'Memory Agent',status:'idle',icon:'🧠'},
+          {name:'Monitoring Agent',status:'running',icon:'📡'},
+          {name:'Automation Agent',status:'idle',icon:'⚙️'},
+        ]).map((a,i) => h('div', { className:'agent-card', key:i },
+          h('div', { className:'agent-icon' }, a.icon || '○'),
+          h('div', { className:'agent-info' },
+            h('div', { className:'agent-name' }, a.name),
+            h('div', { className:'agent-status '+(a.status) }, a.status)
+          )
+        ))
+      )
+    ),
+    /* Recent Activity */
+    h('div', null,
+      h('div', { className:'home-section-title' }, h('span', { className:'bar' }), 'Recent Activity'),
+      store.agentLog.slice(-6).reverse().map((item,i) =>
+        h('div', { className:'activity-row', key:i },
+          h('span', { className:'activity-ts' }, item.ts || item.timestamp || '--:--'),
+          h('span', { className:'activity-msg' }, item.msg || item.message || '')
+        )
+      )
+    ),
+    /* Quick Actions */
+    h('div', null,
+      h('div', { className:'home-section-title' }, h('span', { className:'bar' }), 'Quick Actions'),
+      h('div', { className:'ql-grid' },
+        acts.map((name,i) => h('div', { className:'ql-card', key:i, onClick:()=>{const inp=document.getElementById('chat-input');if(inp){inp.value=name+' ';inp.focus();}} },
+          h('div', { className:'icon' }, icons[i]),
+          h('div', { className:'name' }, name.split(' ').slice(0,2).join(' ')),
+          h('div', { className:'desc' }, name)
+        ))
+      )
+    ),
+    /* Suggested Actions */
+    h('div', null,
+      h('div', { className:'home-section-title' }, h('span', { className:'bar' }), 'Suggestions'),
+      h('div', { className:'suggestion-grid' },
+        [
+          {icon:'📈',text:'Memory database increased 15%',action:'Review cleanup'},
+          {icon:'🚀',text:'New Railway deployment detected',action:'Review health'},
+          {icon:'⚡',text:'GPU temp at 78°C — monitoring',action:'Check cooling'},
+        ].map((s,i) => h('div', { className:'suggestion-item', key:i, onClick:()=>{const inp=document.getElementById('chat-input');if(inp){inp.value=s.action+' ';inp.focus();}} },
+          h('span', { className:'sug-icon' }, s.icon),
+          h('span', { className:'sug-text' }, s.text),
+          h('span', { className:'sug-action' }, s.action+' →')
+        ))
+      )
+    )
+  );
+}
+
+function Messages() {
+  const msgs = store.messages;
+  const ref = useRef(null);
+  useEffect(() => { if (ref.current) ref.current.scrollIntoView({behavior:'smooth'}); }, [msgs.length]);
+  return h('div', { id:'messages' },
+    msgs.map((m,i) => h('div', { className:'msg '+m.role, key:i },
+      h('div', { className:'label' }, m.role === 'user' ? 'You' : 'JARVIS'),
+      h('div', null, m.text)
+    )),
+    h('div', { ref })
+  );
+}
+
+function ThinkingIndicator() {
+  if (!store.thinking) return null;
+  return h('div', { className:'thinking' },
+    h('span', { className:'dot' }), h('span', { className:'dot', style:{animationDelay:'0.2s'} }), h('span', { className:'dot', style:{animationDelay:'0.4s'} }),
+    h('span', { style:{marginLeft:6} }, store.thinking.text)
+  );
+}
+
+function QuickActions() {
+  const acts = ['Research','Code','Analyze','Automate','Search Memory','Monitor','Create Task'];
+  return h('div', { className:'quick-actions' },
+    acts.map(a => h('button', { className:'qck', key:a, onClick:()=>{const inp=document.getElementById('chat-input');if(inp){inp.value=a+' ';inp.focus();}} }, a))
+  );
+}
+
+function InputArea() {
+  const [t,set] = useState('');
+  const send = () => { sendMessage(t); set(''); };
+  const key = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } };
+  return h('div', { id:'input-area' },
+    h('div', { className:'input-wrap' },
+      h('textarea', { id:'chat-input', placeholder:'Ask JARVIS anything\u2026', value:t, onChange:e=>set(e.target.value), onKeyDown:key, rows:1 }),
+      h('div', { className:'input-actions' },
+        h('button', { className:'ia-btn', title:'Voice', onClick:()=>api('/api/wake',{}) }, '\uD83C\uDFA4'),
+        h('button', { className:'ia-btn', title:'Attach' }, '\uD83D\uDCCE'),
+        h('button', { className:'ia-btn send', onClick:send, disabled:!t.trim() }, '\u21B5')
+      )
+    )
+  );
+}
+
+/* ── Right Panel ─────────────────── */
+function RightPanel() {
+  return h('div', { className:'panel panel-right' },
+    h(SystemStatus),
+    h(ActiveModel),
+    h(AgentFeed),
+    h(EnhancedModelRouting),
+    h(MemoryPanel),
+    h(TradingSystemPanel),
+    h(Automations),
+    h(Alerts)
+  );
+}
+
+function SystemStatus() {
+  const m = store.metrics || {};
+  const bars = [
+    {l:'CPU',v:m.cpu||0},{l:'RAM',v:m.ram||0},{l:'GPU',v:m.gpu||0},{l:'VRAM',v:m.vram||0},{l:'Disk',v:m.disk||0}
+  ];
+  const provs = store.providers.length ? store.providers :
+    [{name:'Ollama',status:'offline'},{name:'OpenRouter',status:'online'},{name:'Gemini',status:'online'},{name:'Groq',status:'online'},{name:'NVIDIA',status:'online'}];
+  return h('div', { className:'rp-section' },
+    h('div', { className:'glass' },
+      h('div', { className:'sec-title' }, h('span', { className:'dot' }), 'System'),
+      bars.map((b,i) => h('div', { className:'metric', key:i },
+        h('span', { className:'metric-label' }, b.l),
+        h('div', { className:'metric-bar' }, h('div', { className:'metric-bar-fill', style:{width:Math.min(b.v,100)+'%',background:b.v>80?'var(--red)':b.v>50?'var(--amber)':'var(--blue)'} })),
+        h('span', { className:'metric-value' }, Math.round(b.v)+'%')
+      )),
+      m.gpu_name ? h('div', { style:{fontSize:'9px',color:'var(--muted)',marginTop:2,fontFamily:'var(--font-mono)'} },
+        m.gpu_name + (m.gpu_temp ? '  ·  '+m.gpu_temp+'°C' : '')
+      ) : null,
+      m.uptime ? h('div', { style:{fontSize:'9px',color:'var(--muted)',marginTop:1,fontFamily:'var(--font-mono)'} },
+        '↑ '+m.uptime+'  ·  '+m.processes+' procs'
+      ) : null,
+      h('div', { className:'provider-list' },
+        provs.map(p => h('span', { className:'prov-item '+p.status, key:p.name }, h('span', { className:'prov-dot' }), p.name))
+      )
+    )
+  );
+}
+
+function ActiveModel() {
+  const m = store.model;
+  const Meta = (p) => h('div', { className:'model-stat' }, h('span', { className:'val' }, p.val), h('span', { className:'lbl' }, p.lbl));
+  return h('div', { className:'rp-section' },
+    h('div', { className:'glass' },
+      h('div', { className:'sec-title' }, h('span', { className:'dot' }), 'Active Model'),
+      h('div', { className:'model-card' },
+        h(Meta, { val:m.name, lbl:'Model' }), h(Meta, { val:m.provider, lbl:'Provider' }),
+        h(Meta, { val:m.context, lbl:'Context' }), h(Meta, { val:m.latency, lbl:'Latency' }), h(Meta, { val:m.tokens, lbl:'Tokens' })
+      )
+    )
+  );
+}
+
+function AgentFeed() {
+  const log = store.agentLog;
+  return h('div', { className:'rp-section' },
+    h('div', { className:'glass' },
+      h('div', { className:'sec-title' }, h('span', { className:'dot' }), 'Agent Activity'),
+      h('div', { style:{maxHeight:110,overflowY:'auto'} },
+        log.length === 0
+          ? h('div', { className:'empty-state' }, h('div', { className:'icon' }, '\u25C7'), h('div', null, 'No recent activity'))
+          : log.slice(-15).reverse().map((item,i) => h('div', { className:'feed-item', key:i },
+              h('span', { className:'ts' }, item.ts || item.timestamp || '--:--'),
+              h('span', null, item.msg || item.message || JSON.stringify(item))
+            ))
+      )
+    )
+  );
+}
+
+function EnhancedModelRouting() {
+  const r = store.routing || {};
+  const router = r.router || {name:'Ternary Bonsai 8B',status:'active'};
+  const primary = r.primary || {name:'DeepSeek V4 Pro',status:'standby',tokens:0};
+  const fallback = r.fallback || {name:'GLM 5.1',status:'standby',tokens:0};
+  const lastRoute = r.last_route || 'router';
+  const totalRoutes = r.total_routes || 0;
+  return h('div', { className:'rp-section' },
+    h('div', { className:'glass' },
+      h('div', { className:'sec-title' }, h('span', { className:'dot' }), 'Model Routing'),
+      h('div', { className:'route-flow' },
+        h('div', { className:'route-node'+(lastRoute==='router'?' active-route':'') },
+          h('span', { className:'role-badge' }, 'Router'),
+          h('span', { className:'model-name' }, router.name),
+          h('span', { className:'model-status '+(router.status) }, router.status)
+        ),
+        h('div', { className:'route-arrow' }, '\u2193'),
+        h('div', { className:'route-node'+(lastRoute==='primary'?' active-route':'') },
+          h('span', { className:'role-badge' }, 'Primary'),
+          h('span', { className:'model-name' }, primary.name),
+          h('span', { className:'model-status '+(primary.status) }, primary.status+(primary.tokens?' · '+primary.tokens+'tok':''))
+        ),
+        h('div', { className:'route-arrow' }, '\u2193'),
+        h('div', { className:'route-node'+(lastRoute==='fallback'?' active-route':'') },
+          h('span', { className:'role-badge' }, 'Fallback'),
+          h('span', { className:'model-name' }, fallback.name),
+          h('span', { className:'model-status '+(fallback.status) }, fallback.status)
+        ),
+        totalRoutes > 0 ? h('div', { className:'route-flow-line' },
+          h('span', null, 'Routes: '), h('span', { className:'stat' }, totalRoutes),
+          h('span', null, '\u00b7 Last: '), h('span', { className:'stat' }, lastRoute)
+        ) : null
+      )
+    )
+  );
+}
+
+function MemoryPanel() {
+  const m = store.memory || {};
+  return h('div', { className:'rp-section' },
+    h('div', { className:'glass' },
+      h('div', { className:'sec-title' }, h('span', { className:'dot' }), 'Memory'),
+      h('div', { className:'mem-section' },
+        h('div', { className:'mem-label' }, 'Name'),
+        h('div', { className:'mem-value' }, m.name || '\u2014')
+      ),
+      h('div', { className:'mem-section' },
+        h('div', { className:'mem-label' }, 'Projects'),
+        h('div', null, (m.projects||['JARVIS']).map((p,i) => h('span', { className:'mem-tag', key:i }, p)))
+      ),
+      h('div', { className:'mem-section' },
+        h('div', { className:'mem-label' }, 'Recent'),
+        (m.recent||['System initialized']).slice(0,3).map((r,i) =>
+          h('div', { className:'mem-item', key:i }, typeof r === 'string' ? r : r.text||JSON.stringify(r))
+        )
+      )
+    )
+  );
+}
+
+function TradingSystemPanel() {
+  const eco = store.ecosystem || {};
+  const items = [
+    {label:'Railway', status:eco.railway?.status||'unknown'},
+    {label:'API', status:eco.api?.status||'unknown'},
+    {label:'Broker', status:eco.broker?.status||'unknown'},
+    {label:'OpenBB', status:eco.openbb?.status||'unknown'},
+    {label:'Position Registry', status:eco.position_registry?.status||'unknown'},
+    {label:'Event Bus', status:eco.event_bus?.status||'unknown'},
+  ];
+  const latency = eco.system_latency || {};
+  return h('div', { className:'rp-section' },
+    h('div', { className:'glass' },
+      h('div', { className:'sec-title' }, h('span', { className:'dot', style:{background:'var(--gold)'} }), 'Ecosystem'),
+      items.map((item,i) => h('div', { className:'eco-item', key:i },
+        h('span', { className:'eco-label' }, item.label),
+        h('span', { className:'eco-status '+item.status }, item.status)
+      )),
+      (latency.current || latency.average) ? h('div', { style:{marginTop:4,paddingTop:4,borderTop:'1px solid var(--border)',fontSize:'9px',color:'var(--muted)',fontFamily:'var(--font-mono)'} },
+        'Latency: '+latency.current+'ms avg  ·  Peak: '+latency.peak+'ms'
+      ) : null,
+      eco.last_trade ? h('div', { style:{marginTop:2,fontSize:'9px',color:'var(--muted)',fontFamily:'var(--font-mono)'} },
+        'Last trade: '+eco.last_trade
+      ) : null
+    )
+  );
+}
+
+function Automations() {
+  const a = store.automations;
+  return h('div', { className:'rp-section' },
+    h('div', { className:'glass' },
+      h('div', { className:'sec-title' }, h('span', { className:'dot' }), 'Automations'),
+      a.length === 0
+        ? h('div', { className:'empty-state' }, h('div', { className:'icon' }, '\u2699'), h('div', null, 'No automations'))
+        : a.slice(0,6).map(t => h('div', { className:'auto-item', key:t.id||t.name },
+            h('span', { className:'auto-status '+t.status }, t.status || 'scheduled'),
+            h('span', { className:'auto-name' }, t.name)
+          ))
+    )
+  );
+}
+
+function Alerts() {
+  const a = store.alerts;
+  if (a.length === 0) return h('div', { className:'rp-section' },
+    h('div', { className:'glass', style:{borderColor:'rgba(34,197,94,0.2)'} },
+      h('div', { className:'sec-title' }, h('span', { className:'dot', style:{background:'var(--green)'} }), 'Alerts'),
+      h('div', { style:{fontSize:11,color:'var(--green)',padding:'4px 0'} }, '\u2713 All systems operational')
+    )
+  );
+  const critical = a.some(x => x.type === 'critical' || x.type === 'error');
+  return h('div', { className:'rp-section' },
+    h('div', { className:'glass' },
+      h('div', { className:'sec-title' }, h('span', { className:'dot', style:{background:critical?'var(--red)':'var(--amber)'} }), 'Alerts'),
+      a.slice(0,5).map((x,i) => h('div', { className:'alert-item '+(x.type||'warning'), key:i },
+        h('span', { className:'alert-icon' }, x.type==='error'||x.type==='critical'?'\u26A0':'!'),
+        h('span', { className:'alert-msg' }, x.message)
+      ))
+    )
+  );
+}
+
+/* ── Command Palette ─────────────── */
+function CommandPalette() {
+  const [q, setQ] = React.useState('');
+  const [idx, setIdx] = React.useState(-1);
+  const inp = useRef(null);
+  useEffect(() => { if (inp.current) inp.current.focus(); }, []);
+
+  const actions = [
+    {group:'Navigate',items:[{icon:'\uD83D\uDCDD',name:'Search Conversations',action:'search conv'},{icon:'\uD83E\uDDE0',name:'Search Memory',action:'search mem'},{icon:'\u2699',name:'Open Settings',action:'settings'}]},
+    {group:'Launch',items:[{icon:'\uD83D\uDD0D',name:'Research Market',action:'Research Market'},{icon:'\uD83D\uDCC4',name:'Analyze Repository',action:'Analyze repository'},{icon:'\uD83D\uDCCA',name:'Generate Report',action:'Generate report'},{icon:'\u2699',name:'Create Automation',action:'Create automation'}]},
+    {group:'System',items:[{icon:'\uD83D\uDEE0\uFE0F',name:'Monitor Railway',action:'Monitor Railway'},{icon:'\uD83D\uDCC8',name:'Check OpenBB',action:'Check OpenBB'},{icon:'\uD83D\uDCBB',name:'Switch Model',action:'switch model'},{icon:'\uD83D\uDE80',name:'Run Research',action:'Run deep research'}]},
+  ];
+
+  const flat = actions.flatMap(g => g.items);
+  const filtered = q ? flat.filter(x => x.name.toLowerCase().includes(q.toLowerCase())) : flat;
+
+  const onKey = e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setIdx(i => Math.min(i+1, filtered.length-1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setIdx(i => Math.max(i-1, 0)); }
+    else if (e.key === 'Enter' && idx >= 0 && filtered[idx]) {
+      setState('cmdOpen', false);
+      const inp2 = document.getElementById('chat-input');
+      if (inp2) { inp2.value = filtered[idx].action + ' '; inp2.focus(); }
+    } else if (e.key === 'Enter') {
+      setState('cmdOpen', false);
+    }
+  };
+
+  return h('div', { className:'cmd-overlay', onClick:()=>setState('cmdOpen',false) },
+    h('div', { className:'cmd-modal', onClick:e=>e.stopPropagation() },
+      h('div', { className:'cmd-input-wrap' },
+        h('span', { className:'icon' }, '\u2318'),
+        h('input', { ref:inp, className:'cmd-input', placeholder:'Search conversations, memory, skills, models\u2026', value:q, onChange:e=>{setQ(e.target.value);setIdx(-1);}, onKeyDown:onKey }),
+        h('span', { className:'cmd-hint' }, 'ESC')
+      ),
+      h('div', { className:'cmd-results' },
+        q === '' && filtered.length > 0
+          ? actions.map((g,gi) => h(React.Fragment, {key:gi},
+              h('div', { className:'cmd-group-label' }, g.group),
+              g.items.map((item,ii) => {
+                const fi = filtered.indexOf(item);
+                return h('div', { className:'cmd-item'+(fi===idx?' active':''), key:ii,
+                  onMouseEnter:()=>setIdx(fi), onClick:()=>{setState('cmdOpen',false);const inp2=document.getElementById('chat-input');if(inp2){inp2.value=item.action+' ';inp2.focus();}}
+                }, h('span', { className:'icon' }, item.icon), h('span', { className:'name' }, item.name));
+              })
+            ))
+          : filtered.map((item,i) => h('div', { className:'cmd-item'+(i===idx?' active':''), key:i,
+              onMouseEnter:()=>setIdx(i), onClick:()=>{setState('cmdOpen',false);const inp2=document.getElementById('chat-input');if(inp2){inp2.value=item.action+' ';inp2.focus();}}
+            }, h('span', { className:'icon' }, item.icon), h('span', { className:'name' }, item.name)))
+      )
+    )
+  );
+}
+
+/* ── Keyboard handler ────────────── */
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault();
+    setState('cmdOpen', !store.cmdOpen);
+  }
+  if (e.key === 'Escape' && store.cmdOpen) {
+    setState('cmdOpen', false);
+  }
+});
+
+/* ── Boot ────────────────────────── */
+(function() {
+  const root = document.getElementById('root');
+  if (root) ReactDOM.createRoot(root).render(h(App));
+  initOrb();
+  connectSSE();
+  connectMetricsSSE();
+  fetchInitial();
+
+  /* Simulate audio level for orb reactivity */
+  setInterval(() => {
+    const s = store.state;
+    if (s === 'listening' || s === 'speaking') {
+      setState('audioLevel', Math.random() * 0.6 + 0.1);
+    } else {
+      setState('audioLevel', 0);
+    }
+  }, 200);
+})();
+</script>
+{% endraw %}
 </body>
 </html>

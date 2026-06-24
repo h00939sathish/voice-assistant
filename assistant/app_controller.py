@@ -66,6 +66,14 @@ class AppController:
         "powerpoint": "powerpnt",
     }
 
+    WINDOW_TITLE_BLACKLIST = [
+        "remote desktop",
+        "credentials",
+        "notification",
+        "settings",
+        "security",
+    ]
+
     def __init__(self):
         self.system = platform.system()
         self.active_app: str | None = None
@@ -91,32 +99,32 @@ class AppController:
                 "volume_down": self._spotify_volume_down,
             },
             "chrome": {
-                "new_tab": self._chrome_new_tab,
-                "close_tab": self._chrome_close_tab,
-                "search": self._chrome_search,
-                "go_to": self._chrome_goto,
-                "find_on_page": lambda **k: self._browser_find_on_page("chrome", **k),
+                "new_tab": lambda **k: self._browser_action("chrome", "new_tab", **k),
+                "close_tab": lambda **k: self._browser_action("chrome", "close_tab", **k),
+                "search": lambda **k: self._browser_action("chrome", "search", **k),
+                "go_to": lambda **k: self._browser_action("chrome", "go_to", **k),
+                "find_on_page": lambda **k: self._browser_action("chrome", "find_on_page", **k),
             },
             "edge": {
-                "new_tab": self._edge_new_tab,
-                "close_tab": self._edge_close_tab,
-                "search": self._edge_search,
-                "go_to": self._edge_goto,
-                "find_on_page": lambda **k: self._browser_find_on_page("edge", **k),
+                "new_tab": lambda **k: self._browser_action("edge", "new_tab", **k),
+                "close_tab": lambda **k: self._browser_action("edge", "close_tab", **k),
+                "search": lambda **k: self._browser_action("edge", "search", **k),
+                "go_to": lambda **k: self._browser_action("edge", "go_to", **k),
+                "find_on_page": lambda **k: self._browser_action("edge", "find_on_page", **k),
             },
             "brave": {
-                "new_tab": self._brave_new_tab,
-                "close_tab": self._brave_close_tab,
-                "search": self._brave_search,
-                "go_to": self._brave_goto,
-                "find_on_page": lambda **k: self._browser_find_on_page("brave", **k),
+                "new_tab": lambda **k: self._browser_action("brave", "new_tab", **k),
+                "close_tab": lambda **k: self._browser_action("brave", "close_tab", **k),
+                "search": lambda **k: self._browser_action("brave", "search", **k),
+                "go_to": lambda **k: self._browser_action("brave", "go_to", **k),
+                "find_on_page": lambda **k: self._browser_action("brave", "find_on_page", **k),
             },
             "opera": {
-                "new_tab": self._opera_new_tab,
-                "close_tab": self._opera_close_tab,
-                "search": self._opera_search,
-                "go_to": self._opera_goto,
-                "find_on_page": lambda **k: self._browser_find_on_page("opera", **k),
+                "new_tab": lambda **k: self._browser_action("opera", "new_tab", **k),
+                "close_tab": lambda **k: self._browser_action("opera", "close_tab", **k),
+                "search": lambda **k: self._browser_action("opera", "search", **k),
+                "go_to": lambda **k: self._browser_action("opera", "go_to", **k),
+                "find_on_page": lambda **k: self._browser_action("opera", "find_on_page", **k),
             },
             "notepad": {
                 "type": self._notepad_type,
@@ -137,30 +145,15 @@ class AppController:
             },
         }
 
-    def _browser_find_on_page(self, app_name: str, query: str = "", **kwargs) -> str:
-        """Generic Ctrl+F handler for browsers"""
-        try:
-            if not self._ensure_windows():
-                return f"{app_name} operations are Windows-only"
-
-            handle = self.find_window_by_title(app_name)
-            if not handle:
-                return f"{app_name} window not found"
-
-            self.focus_window(handle)
-            time.sleep(0.1)
-            pyautogui.hotkey("ctrl", "f")
-            time.sleep(0.3)
-
-            if query:
-                pyautogui.write(query, interval=0.03)
-                pyautogui.press("enter")
-                return f"Finding '{query}' on page"
-            return "Opened find bar"
-
-        except Exception:
-            logger.exception(f"{app_name} find on page failed")
-            return f"Failed to find on page in {app_name}"
+    def _ensure_app_window(self, app_name: str, window_title: str | None = None) -> int | None:
+        """Find window, auto-launching app if not found."""
+        title = window_title or app_name
+        handle = self.find_window_by_title(title)
+        if not handle:
+            self.launch_by_name(app_name)
+            time.sleep(2.0)
+            handle = self.find_window_by_title(title)
+        return handle
 
     def set_volume(self, lvl: int) -> str:
         if self.volume:
@@ -187,6 +180,15 @@ class AppController:
             return False
         return True
 
+    @staticmethod
+    def windows_only(method):
+        """Decorator: wrap a method so it returns an error string on non-Windows."""
+        def wrapper(self, *args, **kwargs):
+            if not self._ensure_windows():
+                return f"{method.__name__} is Windows-only"
+            return method(self, *args, **kwargs)
+        return wrapper
+
     def find_window_by_title(
         self, title_contains: str, retries: int = 3, delay: float = 0.6
     ) -> int | None:
@@ -194,7 +196,8 @@ class AppController:
         if not self._ensure_windows():
             return None
 
-        title_contains = title_contains.lower()
+        target = title_contains.lower()
+        blacklist = tuple(b.lower() for b in self.WINDOW_TITLE_BLACKLIST)
         for _attempt in range(retries):
             found_handle = None
 
@@ -203,9 +206,10 @@ class AppController:
                 try:
                     if win32gui.IsWindowVisible(hwnd):
                         window_title = win32gui.GetWindowText(hwnd) or ""
-                        if title_contains in window_title.lower():
+                        title_lower = window_title.lower()
+                        if target in title_lower and not any(b in title_lower for b in blacklist):
                             found_handle = hwnd
-                            return False  # stop enumeration
+                            return False
                 except Exception:
                     pass
                 return True
@@ -287,6 +291,26 @@ class AppController:
             time.sleep(0.5)
         return False
 
+    def kill_process(self, app_name: str) -> str:
+        """Kill an application by name."""
+        try:
+            app_lower = app_name.lower()
+            killed = []
+            for proc in psutil.process_iter(["name"]):
+                try:
+                    pname = (proc.info.get("name") or "").lower()
+                    if app_lower in pname:
+                        proc.kill()
+                        killed.append(pname)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            if killed:
+                return f"Killed {len(killed)} process(es) matching '{app_name}'."
+            return f"No running process found for '{app_name}'."
+        except Exception as e:
+            logger.exception(f"kill_process failed for {app_name}")
+            return f"Failed to kill {app_name}: {e}"
+
     def launch_app(self, app_name: str) -> str:
         """Launch an application using App Scanner."""
         logger.info(f"Attempting to launch: {app_name}")
@@ -357,8 +381,9 @@ class AppController:
     def keyboard_mute(self) -> str:
         try:
             if IS_WINDOWS:
-                ctypes.windll.user32.keybd_event(0xAD, 0, 0, 0)
-                ctypes.windll.user32.keybd_event(0xAD, 0, 2, 0)
+                user32 = ctypes.windll.user32
+                user32.keybd_event(0xAD, 0, 0, 0)
+                user32.keybd_event(0xAD, 0, 2, 0)
                 return "Toggled mute."
             return "Mute is only supported on Windows."
         except Exception as e:
@@ -466,197 +491,53 @@ class AppController:
             logger.exception("Volume down failed")
             return "Failed to change volume"
 
-    # ==================== Chrome Controls ====================
-    def _chrome_new_tab(self, **kwargs) -> str:
-        try:
-            if not self._ensure_windows():
-                return "Chrome operations are Windows-only in this build"
-            handle = self.find_window_by_title("chrome")
-            if handle:
-                self.focus_window(handle)
-                pyautogui.hotkey("ctrl", "t")
-                return "Opened new tab"
-            return "Chrome window not found"
-        except Exception:
-            logger.exception("Chrome new tab failed")
-            return "Failed to open new tab"
+    # ==================== Consolidated Browser Controls ====================
+    _BROWSER_WINDOW_TITLES = {
+        "chrome": "chrome",
+        "edge": "edge",
+        "brave": "brave",
+        "opera": "opera",
+    }
 
-    def _chrome_close_tab(self, **kwargs) -> str:
+    def _browser_action(self, browser: str, action: str, query: str = "", url: str = "", **kwargs) -> str:
         try:
             if not self._ensure_windows():
-                return "Chrome operations are Windows-only"
-            handle = self.find_window_by_title("chrome")
-            if handle:
-                self.focus_window(handle)
-                pyautogui.hotkey("ctrl", "w")
-                return "Closed tab"
-            return "Chrome window not found"
-        except Exception:
-            logger.exception("Chrome close tab failed")
-            return "Failed to close tab"
+                return f"{browser} operations are Windows-only"
 
-    def _chrome_search(self, query: str = "", **kwargs) -> str:
-        try:
-            if not self._ensure_windows():
-                return "Chrome operations are Windows-only"
-            handle = self.find_window_by_title("chrome")
+            title = self._BROWSER_WINDOW_TITLES.get(browser, browser)
+            handle = self._ensure_app_window(browser, window_title=title)
             if not handle:
-                return "Chrome window not found"
+                return f"{browser} window not found"
+
             self.focus_window(handle)
-            pyautogui.hotkey("ctrl", "l")
-            pyautogui.write(query, interval=0.03)
-            pyautogui.press("enter")
-            return f"Searching for '{query}'"
-        except Exception:
-            logger.exception("Chrome search failed")
-            return "Failed to search in Chrome"
 
-    def _chrome_goto(self, url: str = "", **kwargs) -> str:
-        return self._chrome_search(query=url)
-
-    # ==================== Microsoft Edge Controls ====================
-    def _edge_new_tab(self, **kwargs) -> str:
-        try:
-            if not self._ensure_windows():
-                return "Edge operations are Windows-only in this build"
-            handle = self.find_window_by_title("edge")
-            if handle:
-                self.focus_window(handle)
+            if action == "new_tab":
                 pyautogui.hotkey("ctrl", "t")
-                return "Opened new tab in Edge"
-            return "Edge window not found"
-        except Exception:
-            logger.exception("Edge new tab failed")
-            return "Failed to open new tab"
-
-    def _edge_close_tab(self, **kwargs) -> str:
-        try:
-            if not self._ensure_windows():
-                return "Edge operations are Windows-only"
-            handle = self.find_window_by_title("edge")
-            if handle:
-                self.focus_window(handle)
+                return f"Opened new tab in {browser}"
+            if action == "close_tab":
                 pyautogui.hotkey("ctrl", "w")
-                return "Closed Edge tab"
-            return "Edge window not found"
+                return f"Closed tab in {browser}"
+            if action in ("search", "go_to"):
+                target = query or url or ""
+                pyautogui.hotkey("ctrl", "l")
+                if target:
+                    pyautogui.write(target, interval=0.03)
+                    pyautogui.press("enter")
+                    return f"Navigating to '{target}' in {browser}"
+                return f"Opened address bar in {browser}"
+            if action == "find_on_page":
+                pyautogui.hotkey("ctrl", "f")
+                time.sleep(0.3)
+                if query:
+                    pyautogui.write(query, interval=0.03)
+                    pyautogui.press("enter")
+                    return f"Finding '{query}' in {browser}"
+                return f"Opened find bar in {browser}"
+
+            return f"Unknown browser action: {action}"
         except Exception:
-            logger.exception("Edge close tab failed")
-            return "Failed to close tab"
-
-    def _edge_search(self, query: str = "", **kwargs) -> str:
-        try:
-            if not self._ensure_windows():
-                return "Edge operations are Windows-only"
-            handle = self.find_window_by_title("edge")
-            if not handle:
-                return "Edge window not found"
-            self.focus_window(handle)
-            pyautogui.hotkey("ctrl", "l")
-            pyautogui.write(query, interval=0.03)
-            pyautogui.press("enter")
-            return f"Searching for '{query}' in Edge"
-        except Exception:
-            logger.exception("Edge search failed")
-            return "Failed to search in Edge"
-
-    def _edge_goto(self, url: str = "", **kwargs) -> str:
-        return self._edge_search(query=url)
-
-    # ==================== Brave Browser Controls ====================
-    def _brave_new_tab(self, **kwargs) -> str:
-        try:
-            if not self._ensure_windows():
-                return "Brave operations are Windows-only in this build"
-            handle = self.find_window_by_title("brave")
-            if handle:
-                self.focus_window(handle)
-                pyautogui.hotkey("ctrl", "t")
-                return "Opened new tab in Brave"
-            return "Brave window not found"
-        except Exception:
-            logger.exception("Brave new tab failed")
-            return "Failed to open new tab"
-
-    def _brave_close_tab(self, **kwargs) -> str:
-        try:
-            if not self._ensure_windows():
-                return "Brave operations are Windows-only"
-            handle = self.find_window_by_title("brave")
-            if handle:
-                self.focus_window(handle)
-                pyautogui.hotkey("ctrl", "w")
-                return "Closed Brave tab"
-            return "Brave window not found"
-        except Exception:
-            logger.exception("Brave close tab failed")
-            return "Failed to close tab"
-
-    def _brave_search(self, query: str = "", **kwargs) -> str:
-        try:
-            if not self._ensure_windows():
-                return "Brave operations are Windows-only"
-            handle = self.find_window_by_title("brave")
-            if not handle:
-                return "Brave window not found"
-            self.focus_window(handle)
-            pyautogui.hotkey("ctrl", "l")
-            pyautogui.write(query, interval=0.03)
-            pyautogui.press("enter")
-            return f"Searching for '{query}' in Brave"
-        except Exception:
-            logger.exception("Brave search failed")
-            return "Failed to search in Brave"
-
-    def _brave_goto(self, url: str = "", **kwargs) -> str:
-        return self._brave_search(query=url)
-
-    # ==================== Opera Browser Controls ====================
-    def _opera_new_tab(self, **kwargs) -> str:
-        try:
-            if not self._ensure_windows():
-                return "Opera operations are Windows-only in this build"
-            handle = self.find_window_by_title("opera")
-            if handle:
-                self.focus_window(handle)
-                pyautogui.hotkey("ctrl", "t")
-                return "Opened new tab in Opera"
-            return "Opera window not found"
-        except Exception:
-            logger.exception("Opera new tab failed")
-            return "Failed to open new tab"
-
-    def _opera_close_tab(self, **kwargs) -> str:
-        try:
-            if not self._ensure_windows():
-                return "Opera operations are Windows-only"
-            handle = self.find_window_by_title("opera")
-            if handle:
-                self.focus_window(handle)
-                pyautogui.hotkey("ctrl", "w")
-                return "Closed Opera tab"
-            return "Opera window not found"
-        except Exception:
-            logger.exception("Opera close tab failed")
-            return "Failed to close tab"
-
-    def _opera_search(self, query: str = "", **kwargs) -> str:
-        try:
-            if not self._ensure_windows():
-                return "Opera operations are Windows-only"
-            handle = self.find_window_by_title("opera")
-            if not handle:
-                return "Opera window not found"
-            self.focus_window(handle)
-            pyautogui.hotkey("ctrl", "l")
-            pyautogui.write(query, interval=0.03)
-            pyautogui.press("enter")
-            return f"Searching for '{query}' in Opera"
-        except Exception:
-            logger.exception("Opera search failed")
-            return "Failed to search in Opera"
-
-    def _opera_goto(self, url: str = "", **kwargs) -> str:
-        return self._opera_search(query=url)
+            logger.exception(f"{browser} {action} failed")
+            return f"Failed to {action} in {browser}"
 
     # ==================== Notepad Controls ====================
     def _notepad_type(self, text: str = "", **kwargs) -> str:

@@ -135,35 +135,12 @@ body::before {
   opacity: 0.6;
 }
 
-/* ── Orb ─────────────────────────── */
-#orb-container {
-  position: relative;
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 16px 0 8px;
-}
+/* ── Orb Canvas (behind mascot) ──── */
 #orb-canvas {
-  width: 120px;
-  height: 120px;
   border-radius: 50%;
   cursor: pointer;
-}
-
-.orb-ring {
-  position: absolute;
-  border-radius: 50%;
-  border: 1px solid transparent;
-  pointer-events: none;
-}
-.orb-ring.r1 {
-  width: 140px; height: 140px;
-  border-color: rgba(59, 130, 246, 0.08);
-}
-.orb-ring.r2 {
-  width: 160px; height: 160px;
-  border-color: rgba(59, 130, 246, 0.04);
+  position: relative;
+  z-index: 1;
 }
 
 /* ── Status grid ─────────────────── */
@@ -600,3 +577,550 @@ body::before {
 .badge.thinking { background: var(--amber-dim); color: var(--amber); }
 .badge.speaking { background: var(--teal-dim); color: var(--teal); }
 .badge.error { background: var(--red-dim); color: var(--red); }
+
+/* ── Home Workspace ──────────────── */
+.home-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.home-section-title {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.home-section-title .bar {
+  width: 2px; height: 12px;
+  background: var(--blue);
+  border-radius: 1px;
+}
+
+/* Objective card */
+.home-obj {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, rgba(59,130,246,0.06), rgba(212,168,75,0.04));
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius);
+}
+.home-obj-state {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: objPulse 2s ease infinite;
+}
+.home-obj-state.running { background: var(--green); box-shadow: 0 0 12px rgba(34,197,94,0.4); }
+.home-obj-state.idle { background: var(--muted); animation: none; }
+.home-obj-text { flex: 1; }
+.home-obj-text .title { font-family: var(--font-display); font-size: 14px; font-weight: 700; color: var(--text); }
+.home-obj-text .meta { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+@keyframes objPulse { 0%,100%{opacity:0.6} 50%{opacity:1} }
+
+/* Quick Launch grid */
+.ql-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.ql-card {
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+.ql-card:hover {
+  border-color: var(--border-hi);
+  background: var(--surface-2);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+.ql-card .icon { font-size: 20px; margin-bottom: 6px; }
+.ql-card .name { font-size: 11px; font-weight: 600; color: var(--text); }
+.ql-card .desc { font-size: 9px; color: var(--muted); margin-top: 2px; }
+
+/* Activity strip */
+.activity-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+.activity-item {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.activity-item .dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+}
+.activity-item .dot.go { background: var(--green); }
+.activity-item .dot.pending { background: var(--amber); }
+.activity-item .dot.done { background: var(--muted); }
+
+/* Conversation list */
+.conv-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(26,26,53,0.3);
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.conv-item:last-child { border-bottom: none; }
+.conv-item:hover { opacity: 0.8; }
+.conv-icon { font-size: 14px; }
+.conv-info { flex: 1; }
+.conv-info .title { font-size: 12px; color: var(--text); }
+.conv-info .meta { font-size: 10px; color: var(--muted); margin-top: 1px; }
+.conv-ts { font-size: 10px; color: var(--muted); font-family: var(--font-mono); }
+
+/* ── Command Palette ──────────────── */
+.cmd-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  animation: fadeIn 0.15s ease;
+}
+.cmd-modal {
+  width: 580px;
+  max-width: 90vw;
+  background: var(--surface-2);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  overflow: hidden;
+  animation: slideUp 0.15s ease;
+}
+.cmd-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.cmd-input-wrap .icon { font-size: 16px; color: var(--muted); }
+.cmd-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+}
+.cmd-input::placeholder { color: var(--muted); }
+.cmd-hint {
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+}
+.cmd-results {
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 6px;
+}
+.cmd-group-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 8px 10px 4px;
+}
+.cmd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.cmd-item:hover, .cmd-item.active {
+  background: var(--surface-3);
+}
+.cmd-item .icon { font-size: 14px; width: 24px; text-align: center; }
+.cmd-item .name { flex: 1; font-size: 12px; color: var(--text); }
+.cmd-item .shortcut {
+  font-size: 9px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+/* ── Model Routing ────────────────── */
+.route-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 0;
+}
+.route-node {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 11px;
+}
+.route-node .role-badge {
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--border);
+  color: var(--muted);
+}
+.route-node .model-name {
+  flex: 1;
+  color: var(--text);
+  font-weight: 500;
+}
+.route-node .model-status {
+  font-size: 9px;
+  color: var(--green);
+}
+.route-arrow {
+  text-align: center;
+  font-size: 10px;
+  color: var(--muted);
+  padding: 1px 0;
+}
+.route-flow-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.route-flow-line .stat {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+/* ── Dash Mascot ─────────────────── */
+#mascot-container {
+  position: relative;
+  width: 100%;
+  min-height: 120px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+#mascot-svg {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.mascot-ambient {
+  fill: none;
+  stroke-width: 0.5;
+  opacity: 0.1;
+  transition: all 0.6s ease;
+}
+
+.mascot-orbit-outer {
+  fill: none;
+  stroke-width: 1.2;
+  stroke-dasharray: 6 10;
+  opacity: 0.08;
+  transform-origin: center;
+  animation: mascotSpin 10s linear infinite;
+  transition: all 0.5s ease;
+}
+
+.mascot-head {
+  fill: rgba(15, 15, 32, 0.7);
+  stroke-width: 1.2;
+  transition: stroke 0.4s ease, filter 0.4s ease, fill 0.4s ease;
+}
+
+.mascot-face {
+  fill: rgba(10, 10, 20, 0.4);
+  stroke: none;
+}
+
+.mascot-eye-group {
+  transition: transform 0.3s ease;
+}
+
+.mascot-eye {
+  stroke-width: 1;
+  transition: all 0.4s ease;
+}
+
+.mascot-eye-glow {
+  opacity: 0;
+  filter: blur(2px);
+  transition: all 0.4s ease;
+}
+
+.mascot-crown {
+  transition: all 0.4s ease;
+}
+
+.mascot-accent {
+  stroke-width: 1;
+  stroke-linecap: round;
+  opacity: 0.15;
+  transition: all 0.4s ease;
+}
+
+.mascot-voice line {
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  transition: opacity 0.3s ease;
+}
+
+/* ── State: idle ──────────────────── */
+.state-idle .mascot-ambient { stroke: var(--muted); opacity: 0.08; }
+.state-idle .mascot-orbit-outer { stroke: var(--muted); opacity: 0.06; animation-duration: 12s; }
+.state-idle .mascot-head { stroke: var(--muted); }
+.state-idle .mascot-eye { fill: var(--muted); opacity: 0.25; stroke: var(--muted); }
+.state-idle .mascot-eye-glow { opacity: 0; }
+.state-idle .mascot-crown { fill: var(--muted); opacity: 0.2; }
+.state-idle .mascot-accent { stroke: var(--muted); opacity: 0.08; }
+
+/* ── State: listening ─────────────── */
+.state-listening .mascot-ambient { stroke: var(--blue); opacity: 0.2; animation: glowPulse 2s ease infinite; }
+.state-listening .mascot-orbit-outer { stroke: var(--blue); opacity: 0.18; animation-duration: 8s; }
+.state-listening .mascot-head { stroke: var(--blue); filter: drop-shadow(0 0 8px rgba(59,130,246,0.3)); }
+.state-listening .mascot-eye { fill: var(--blue); opacity: 1; stroke: var(--blue); }
+.state-listening .mascot-eye-glow { opacity: 0.5; fill: var(--blue); }
+.state-listening .mascot-crown { fill: var(--blue); opacity: 0.8; animation: crownPulse 1.5s ease infinite; }
+.state-listening .mascot-accent { stroke: var(--blue); opacity: 0.3; }
+
+/* ── State: thinking ──────────────── */
+.state-thinking .mascot-ambient { stroke: var(--amber); opacity: 0.2; animation: glowPulse 1.2s ease infinite; }
+.state-thinking .mascot-orbit-outer { stroke: var(--amber); opacity: 0.2; animation-duration: 5s; }
+.state-thinking .mascot-head { stroke: var(--amber); filter: drop-shadow(0 0 8px rgba(245,158,11,0.3)); }
+.state-thinking .mascot-eye { fill: var(--amber); opacity: 1; stroke: var(--amber); }
+.state-thinking .mascot-eye-glow { opacity: 0.4; fill: var(--amber); }
+.state-thinking .mascot-crown { fill: var(--amber); opacity: 1; }
+.state-thinking .mascot-accent { stroke: var(--amber); opacity: 0.35; }
+.state-thinking .mascot-eye-group.left { animation: eyeScanLeft 0.8s ease infinite alternate; }
+.state-thinking .mascot-eye-group.right { animation: eyeScanRight 0.8s ease infinite alternate; }
+
+/* ── State: speaking ──────────────── */
+.state-speaking .mascot-ambient { stroke: var(--teal); opacity: 0.2; animation: glowPulse 1.5s ease infinite; }
+.state-speaking .mascot-orbit-outer { stroke: var(--teal); opacity: 0.18; animation-duration: 9s; }
+.state-speaking .mascot-head { stroke: var(--teal); filter: drop-shadow(0 0 8px rgba(45,212,191,0.3)); }
+.state-speaking .mascot-eye { fill: var(--teal); opacity: 1; stroke: var(--teal); }
+.state-speaking .mascot-eye-glow { opacity: 0.5; fill: var(--teal); }
+.state-speaking .mascot-crown { fill: var(--teal); opacity: 0.8; }
+.state-speaking .mascot-accent { stroke: var(--teal); opacity: 0.3; }
+.state-speaking .mascot-voice line { opacity: 0.8; animation: voiceBounce 0.5s ease infinite alternate; }
+.state-speaking .mascot-voice line:nth-child(1) { animation-delay: 0s; }
+.state-speaking .mascot-voice line:nth-child(2) { animation-delay: 0.15s; }
+.state-speaking .mascot-voice line:nth-child(3) { animation-delay: 0.3s; }
+
+/* ── State: error ─────────────────── */
+.state-error .mascot-ambient { stroke: var(--red); opacity: 0.3; animation: glowPulse 0.4s ease infinite; }
+.state-error .mascot-orbit-outer { stroke: var(--red); opacity: 0.25; animation-duration: 3s; }
+.state-error .mascot-head { stroke: var(--red); filter: drop-shadow(0 0 12px rgba(239,68,68,0.4)); }
+.state-error .mascot-eye { fill: var(--red); opacity: 1; stroke: var(--red); }
+.state-error .mascot-eye-glow { opacity: 0.6; fill: var(--red); }
+.state-error .mascot-crown { fill: var(--red); opacity: 1; animation: crownPulse 0.4s ease infinite; }
+.state-error .mascot-accent { stroke: var(--red); opacity: 0.4; }
+
+/* ── Animations ──────────────────── */
+@keyframes mascotSpin {
+  to { transform: rotate(360deg); }
+}
+@keyframes crownPulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+@keyframes eyeScanLeft {
+  0% { transform: translateX(-1.5px); }
+  100% { transform: translateX(1.5px); }
+}
+@keyframes eyeScanRight {
+  0% { transform: translateX(1.5px); }
+  100% { transform: translateX(-1.5px); }
+}
+@keyframes voiceBounce {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-3px); }
+}
+
+/* ── Override: welcome is hidden when home is shown ── */
+.home-active .welcome { display: none; }
+
+/* ── Active Route highlight ──────── */
+.route-node.active-route {
+  border-color: var(--blue);
+  background: rgba(59, 130, 246, 0.06);
+}
+.route-node.active-route .role-badge {
+  background: var(--blue);
+  color: white;
+}
+
+/* ── Agent Grid (Mission Control) ── */
+.agent-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.agent-card {
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: border-color 0.2s;
+}
+.agent-card:hover { border-color: var(--border-hi); }
+.agent-icon { font-size: 16px; }
+.agent-info { flex: 1; }
+.agent-name { font-size: 11px; font-weight: 600; color: var(--text); }
+.agent-status { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 1px; }
+.agent-status.running { color: var(--green); }
+.agent-status.idle { color: var(--muted); }
+.agent-status.waiting { color: var(--amber); }
+.agent-status.completed { color: var(--blue); }
+.agent-status.failed { color: var(--red); }
+
+/* ── Activity Row (Mission Control) */
+.activity-row {
+  display: flex;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 11px;
+  border-bottom: 1px solid rgba(26,26,53,0.3);
+}
+.activity-row:last-child { border-bottom: none; }
+.activity-ts {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.activity-msg { color: var(--text-dim); }
+
+/* ── Suggestions (Mission Control) ─ */
+.suggestion-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.suggestion-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.suggestion-item:hover {
+  border-color: var(--border-hi);
+  background: var(--surface-2);
+}
+.sug-icon { font-size: 12px; }
+.sug-text { flex: 1; font-size: 11px; color: var(--text-dim); }
+.sug-action { font-size: 9px; color: var(--blue); font-weight: 600; }
+
+/* ── Ecosystem / Trading System ──── */
+.eco-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 11px;
+  border-bottom: 1px solid rgba(26,26,53,0.3);
+}
+.eco-item:last-child { border-bottom: none; }
+.eco-label { color: var(--text-dim); flex: 1; }
+.eco-status {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+.eco-status.healthy { background: var(--green-dim); color: var(--green); }
+.eco-status.online { background: var(--green-dim); color: var(--green); }
+.eco-status.synchronized { background: var(--green-dim); color: var(--green); }
+.eco-status.connected { background: var(--green-dim); color: var(--green); }
+.eco-status.unknown { background: rgba(74,72,104,0.15); color: var(--muted); }
+.eco-status.disconnected { background: var(--red-dim); color: var(--red); }
+.eco-status.offline { background: var(--red-dim); color: var(--red); }
+.eco-status.warning { background: var(--amber-dim); color: var(--amber); }
+.eco-status.degraded { background: var(--amber-dim); color: var(--amber); }
+
+/* ── Enhanced Objective progress ──── */
+.objective .progress-track {
+  margin-top: 4px;
+}
+.objective .progress-bar-bg {
+  width: 100%;
+  height: 2px;
+  background: var(--border);
+  border-radius: 1px;
+  overflow: hidden;
+}
+.objective .progress-bar-fill {
+  height: 100%;
+  border-radius: 1px;
+  transition: width 0.5s ease;
+}
+
+/* ── Orb audio-reactive ring ─────── */
+.orb-audio-ring {
+  transition: transform 0.15s ease;
+}

@@ -850,8 +850,6 @@ def main():
     orb.start()
     orb.set_state(OrbState.HIDDEN.value)
 
-    start_dashboard(args.dashboard_host, args.dashboard_port)
-
     assistant = VoiceAssistant(
         audio=deps["audio"],
         stt=deps["stt"],
@@ -879,23 +877,26 @@ def main():
 
         return _inner
 
+    import dashboard.app as _dash_app
+
+    dashboard_bridge = None
     try:
         dashboard_bridge = DashboardBridge(event_bus)
-        import dashboard.app as _dash_app
-
-        _dash_app.init(
-            dashboard_bridge,
-            wake_cb=lambda: assistant.trigger_wake() or orb.set_state("listening"),
-            clear_memory_cb=assistant.clear_memory,
-            toggle_mic_cb=_toggle_mic(assistant, orb),
-            confirm_cb=_on_tool_confirmed(event_bus),
-            chat_cb=lambda message, speak=False: assistant.submit_text_chat(
-                message, speak=speak, source="dashboard"
-            ),
-        )
     except Exception as e:
         logger.warning(f"   ⚠️ Dashboard bridge failed: {e}")
-        dashboard_bridge = None
+
+    _dash_app.init(
+        dashboard_bridge,
+        wake_cb=lambda: assistant.trigger_wake() or orb.set_state("listening"),
+        clear_memory_cb=assistant.clear_memory,
+        toggle_mic_cb=_toggle_mic(assistant, orb),
+        confirm_cb=_on_tool_confirmed(event_bus),
+        chat_cb=lambda message, speak=False: assistant.submit_text_chat(
+            message, speak=speak, source="dashboard"
+        ),
+    )
+
+    start_dashboard(args.dashboard_host, args.dashboard_port)
 
     event_bus.subscribe(StateChangeEvent, lambda e: update_ui(e.new_state))
     event_bus.subscribe(
