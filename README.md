@@ -1,6 +1,6 @@
 # Buddy - Voice Assistant
 
-A Python voice assistant with wake word detection, local/online LLM support, and a friendly personality.
+A **Windows-only** Python voice assistant with wake word detection, multi-provider LLM routing, MCP tools, and a friendly personality.
 
 ## AI Assistants: Start Here
 
@@ -14,8 +14,11 @@ This provides recent changes, project status, and development context. Full guid
 
 - 🎤 **Wake Word Detection** - "Hey Jarvis" using openWakeWord
 - 🗣️ **VAD-based Listening** - Silero VAD detects when you stop speaking
-- 🧠 **Dual LLM Support** - Local (Ollama) + Online (Gemini) with fallback
-- 🔊 **High-Quality TTS** - edge-tts with pyttsx3 offline fallback
+- 🧠 **Multi-provider LLM Router** - 8 providers (Ollama, LM Studio, Groq, NVIDIA, Gemini, OpenRouter, OpenCode, FreeLLMAPI) with automatic fallback chain
+- 🔊 **Streaming TTS Cascade** - ElevenLabs → edge-tts → Piper → pyttsx3 offline fallback
+- 🛡️ **Authority Gate** - risk-level approval for tool execution with a SQLite audit trail
+- 🔌 **MCP Client + Server** - tools over stdio with dynamic tool discovery
+- ✋ **Barge-in** - interrupt speech mid-response by talking over it
 - 💬 **Friendly Personality** - Warm, conversational assistant
 
 ## Prerequisites
@@ -89,11 +92,32 @@ Say "Hey Jarvis" to activate, speak your question, and wait for the response!
 
 ## Architecture
 
+Windows-only desktop app (`python main.py`). Voice pipeline, in-process:
+
 ```
-IDLE → WAKE (ding) → LISTENING (VAD) → PROCESSING → STREAMING (TTS)
-  ↑                                                        ↓
-  └────────────────────────────────────────────────────────┘
+mic → openWakeWord ("Hey Jarvis")
+    → faster-whisper STT
+    → LLMRouter (8 providers with fallback chain)
+    → SkillRouter / MCP tools (dynamic tool discovery)
+    → AuthorityGate (risk levels + SQLite audit trail)
+    → streaming TTS cascade (ElevenLabs → edge-tts → Piper → pyttsx3)
+    → speakers
 ```
+
+State machine:
+
+```
+IDLE → WAKE (ding) → LISTENING (VAD) → PROCESSING → SPEAKING (barge-in supported)
+  ↑                                                          ↓
+  └──────────────────────────────────────────────────────────┘
+```
+
+Runtime surfaces (all started by `main.py`):
+
+- **FastAPI control plane** on `http://127.0.0.1:8765` (uvicorn thread; override with `BUDDY_API_PORT`)
+- **Flask dashboard** on `http://127.0.0.1:5050` — live SSE streams at `/stream` and `/api/metrics/stream`
+- **PyQt6 orb overlay** + pystray system tray
+- **SQLite memory** — conversation history plus long-term memory with sqlite-vec vector search
 
 ## Personal Stability Scripts
 
@@ -139,3 +163,10 @@ Use these for reliable daily usage:
 # Project briefing for new AI sessions
 .\briefing.ps1
 ```
+
+## Limitations
+
+- **Windows only** — relies on the `keyboard` hotkey library, `pywinauto`, `pyttsx3`, and Windows default-audio handling; no macOS/Linux support.
+- Dashboard Memory panel currently shows only the configured user name; projects/recent/pinned are placeholders (`dashboard/app.py` `/api/memory`).
+- Dashboard Active Model panel's context/latency/token stats are not wired yet (shown as "—").
+- Piper TTS is skipped unless `PIPER_VOICE_PATH` (and Piper config) are set in `.env`.
