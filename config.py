@@ -183,6 +183,9 @@ MCP_SERVERS = {
 # Assistant personality
 ASSISTANT_NAME = "Buddy"
 
+# Dashboard / user identity
+USER_NAME = os.getenv("USER_NAME", "sir")
+
 # Core Skills (active skills - keep small for maintainability)
 CORE_SKILLS = [
     "time",  # Time queries

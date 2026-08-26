@@ -19,33 +19,12 @@ const store = {
   metrics: { cpu:0, ram:0, gpu:0, vram:0, disk:0, network:0, gpu_temp:0,
              gpu_power:0, gpu_fan:0, gpu_name:'', vram_used:0, vram_total:4,
              cpu_temp:0, uptime:'', processes:0 },
-  providers: [{name:'Ollama',status:'offline'},{name:'OpenRouter',status:'online'},{name:'Gemini',status:'online'},{name:'Groq',status:'online'},{name:'NVIDIA',status:'online'}],
-  memory: { name:'Sathish', projects:['JARVIS','Trading System V4'], recent:['Uses MSI Thin 15','Works with OpenBB','Uses Railway'], pinned:[] },
-  agentLog: [{ts:'08:21',msg:'OpenBB Scan Completed'},{ts:'08:23',msg:'Memory Updated'},{ts:'08:24',msg:'DeepSeek Response Generated'},{ts:'08:25',msg:'Railway Health Check Passed'},{ts:'08:26',msg:'Research Report Created'}],
-  automations: [{id:'1',name:'Trading Monitor',status:'running'},{id:'2',name:'Daily Research Scan',status:'scheduled'},{id:'3',name:'System Backup',status:'completed'},{id:'4',name:'Railway Health Check',status:'running'}],
-  alerts: [{type:'warning',message:'Gemini quota at 85%'},{type:'info',message:'Railway deployment completed'}],
-  model: { name:'DeepSeek V4 Pro', provider:'NVIDIA', context:'1M', latency:'2.3s', tokens:'4.2K' },
-  conversations: [
-    {title:'OpenBB Research', ts:'5 min ago', cat:'Research'},
-    {title:'Railway Deployment Review', ts:'20 min ago', cat:'DevOps'},
-    {title:'Memory Optimization', ts:'1 hour ago', cat:'System'},
-    {title:'Trading Strategy Analysis', ts:'2 hours ago', cat:'Finance'},
-    {title:'Code Review: Agent Pipeline', ts:'3 hours ago', cat:'Development'},
-  ],
+  memory: { name:'', projects:[], recent:[], pinned:[] },
+  agentLog: [],
   cmdOpen: false, cmdQuery: '', cmdIndex: -1, listeners: new Set(),
-  objective: { id:'obj_1', title:'Research Trading Opportunities', progress:0,
-               step:'Initializing', status:'idle', eta:'', steps:[] },
+  objective: { title:'', progress:0, step:'', status:'idle' },
   tasks: [],
-  agents: [],
-  ecosystem: { railway:{status:'unknown'}, api:{status:'unknown'},
-               broker:{status:'unknown'}, openbb:{status:'unknown'},
-               position_registry:{status:'unknown'}, event_bus:{status:'unknown'},
-               last_strategy_run:'', last_trade:'',
-               system_latency:{current:0,average:0,peak:0} },
-  routing: { router:{name:'Ternary Bonsai 8B',status:'active'},
-             primary:{name:'DeepSeek V4 Pro',status:'standby',tokens:0},
-             fallback:{name:'GLM 5.1',status:'standby',tokens:0},
-             last_route:'router', total_routes:0 },
+  routing: [],
   audioLevel: 0,
 };
 
@@ -88,16 +67,23 @@ async function sendMessage(text) {
 
 async function fetchInitial() {
   try { const s = await api('/api/status'); if (s.state) setState('state', s.state);
-    if (s.objective) setState('objective', s.objective);
-    if (s.tasks) setState('tasks', s.tasks);
-    if (s.agents) setState('agents', s.agents);
+    if (Array.isArray(s.tasks)) setState('tasks', s.tasks);
+  } catch {}
+  try {
+    const o = await api('/api/objective');
+    if (o && ('objective' in o)) {
+      setState('objective', o.objective
+        ? { title:o.objective, progress:0, step:'', status:'running' }
+        : { title:'', progress:0, step:'', status:'idle' });
+    }
   } catch {}
   try { const m = await api('/api/memory'); if (m && m.name) setState('memory', m); } catch {}
-  try { const a = await api('/api/automations'); if (Array.isArray(a) && a.length) setState('automations', a); } catch {}
-  try { const a = await api('/api/alerts'); if (Array.isArray(a)) setState('alerts', a); } catch {}
+  try { const r = await api('/api/model-routing'); if (Array.isArray(r)) setState('routing', r); } catch {}
   try { const l = await api('/api/agent/log'); if (Array.isArray(l)) setState('agentLog', l); } catch {}
-  try { const eco = await api('/api/ecosystem'); if (eco && eco.railway) setState('ecosystem', eco); } catch {}
-  try { const r = await api('/api/routing'); if (r && r.router) setState('routing', r); } catch {}
+}
+
+async function refreshTasks() {
+  try { const t = await api('/api/tasks'); if (Array.isArray(t)) setState('tasks', t); } catch {}
 }
 
 function connectMetricsSSE() {
@@ -117,17 +103,13 @@ function connectSSE() {
     try {
       const d = JSON.parse(e.data);
       if (d.state) setState('state', d.state);
-      if (d.metrics) setState('metrics', d.metrics);
-      if (d.providers) setState('providers', d.providers);
-      if (d.memory) setState('memory', d.memory);
-      if (d.agent_log) setState('agentLog', store.agentLog.concat(d.agent_log).slice(-50));
-      if (d.automation) setState('automations', store.automations.filter(a=>a.id!==d.automation.id).concat(d.automation));
-      if (d.alert) setState('alerts', store.alerts.concat(d.alert).slice(-20));
-      if (d.transcript) setState('messages', store.messages.concat({role:d.transcript.speaker==='user'?'user':'assistant',text:d.transcript.text,ts:Date.now()}).slice(-100));
-      if (d.objective) setState('objective', d.objective);
-      if (d.tasks) setState('tasks', d.tasks);
-      if (d.agents) setState('agents', d.agents);
-      if (d.routing) setState('routing', d.routing);
+      if (d.message) setState('messages', store.messages.concat({role:d.message.role==='user'?'user':'assistant',text:d.message.text,ts:Date.now()}).slice(-100));
+      if (d.tool) {
+        const now = new Date();
+        const ts = String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+        setState('agentLog', store.agentLog.concat({ts:ts, msg:(d.tool.tool_name||'tool')+' '+(d.tool.action||'event')}).slice(-50));
+      }
+      if (d.task) refreshTasks();
     } catch {}
   };
   es.onerror = () => { es.close(); setTimeout(connectSSE, 5000); };
@@ -312,7 +294,7 @@ function MascotSection({ state, badge }) {
 
 function LiveObjective() {
   const obj = store.objective || {};
-  const title = obj.title || 'Monitoring system…';
+  const title = obj.title || '\u2014';
   const status = obj.status || 'idle';
   const progress = obj.progress || 0;
   const step = obj.step || '';
@@ -351,29 +333,26 @@ function VoiceStatus({ state }) {
 }
 
 function EnhancedTaskQueue() {
-  const tasks = store.tasks.length ? store.tasks : [
-    {id:'t1',label:'OpenBB Scan',status:'pending',agent:'Research',ts:'',duration:'',priority:'high'},
-    {id:'t2',label:'Railway Health Check',status:'pending',agent:'Monitoring',ts:'',duration:'',priority:'medium'},
-    {id:'t3',label:'Memory Cleanup',status:'pending',agent:'Memory',ts:'',duration:'',priority:'low'},
-    {id:'t4',label:'Daily Security Scan',status:'scheduled',agent:'Security',ts:'',duration:'',priority:'medium'},
-  ];
-  const icons = { running:'●', completed:'✓', scheduled:'⏳', failed:'⚠', cancelled:'✕', waiting:'○', pending:'○' };
+  const tasks = store.tasks || [];
+  const icons = { running:'●', completed:'✓', failed:'⚠', paused:'⏸', pending:'○' };
   return h('div', { className:'glass', style:{flex:1} },
     h('div', { className:'sec-title' }, h('span', { className:'dot' }), 'Tasks'),
     h('div', { style:{maxHeight:160,overflowY:'auto'} },
       tasks.length === 0
         ? h('div', { className:'empty-state' }, h('div', { className:'icon' }, '○'), h('div', null, 'No tasks'))
         : tasks.map(t => {
-            const icon = icons[t.status] || '○';
-            const dotColor = t.status === 'running' ? 'var(--blue)' :
-                             t.status === 'completed' ? 'var(--green)' :
-                             t.status === 'failed' ? 'var(--red)' :
-                             t.status === 'scheduled' ? 'var(--amber)' : 'var(--muted)';
+            const icon = icons[t.state] || '○';
+            const dotColor = t.state === 'running' ? 'var(--blue)' :
+                             t.state === 'completed' ? 'var(--green)' :
+                             t.state === 'failed' ? 'var(--red)' :
+                             t.state === 'paused' ? 'var(--amber)' : 'var(--muted)';
+            const stepCount = (t.steps || []).length;
+            const stepInfo = stepCount ? ((t.current_step_index||0)+'/'+stepCount) : '';
             return h('div', { className:'task-item', key:t.id },
               h('span', { style:{color:dotColor,fontSize:'10px'} }, icon),
-              h('span', { className:'task-label', style:{flex:1} }, t.label),
-              t.agent ? h('span', { style:{fontSize:'8px',color:'var(--muted)'} }, t.agent) : null,
-              t.duration ? h('span', { style:{fontSize:'8px',color:'var(--muted)',fontFamily:'var(--font-mono)'} }, t.duration) : null
+              h('span', { className:'task-label', style:{flex:1} }, t.goal || '\u2014'),
+              t.error ? h('span', { style:{fontSize:'8px',color:'var(--red)'} }, '!') : null,
+              stepInfo ? h('span', { style:{fontSize:'8px',color:'var(--muted)',fontFamily:'var(--font-mono)'} }, stepInfo) : null
             );
           })
     )
@@ -391,8 +370,8 @@ function CenterPanel() {
 }
 
 function MissionControl() {
-  const acts = ['Research Market','Analyze Repo','Review Memory','Generate Report','Create Automation','Check OpenBB','Monitor Railway','Research Deep'];
-  const icons = ['🔍','📄','🧠','📊','⚙️','📈','🚀','🔬'];
+  const acts = ['Research Topic','Summarize Text','Explain Concept','Draft Email','Brainstorm Ideas','Translate Text','Write Code','Plan My Day'];
+  const icons = ['🔍','📄','💡','✉️','🧠','🌐','💻','📅'];
   return h('div', { className:'home-scroll' },
     /* Today / Objective Card */
     h('div', { className:'home-obj' },
@@ -408,33 +387,17 @@ function MissionControl() {
         h('div', { style:{fontSize:'8px',color:'var(--muted)'} }, 'Progress')
       ) : null
     ),
-    /* Active Agents */
-    h('div', null,
-      h('div', { className:'home-section-title' }, h('span', { className:'bar' }), 'Active Agents'),
-      h('div', { className:'agent-grid' },
-        (store.agents.length ? store.agents : [
-          {name:'Research Agent',status:'idle',icon:'🔍'},
-          {name:'Memory Agent',status:'idle',icon:'🧠'},
-          {name:'Monitoring Agent',status:'running',icon:'📡'},
-          {name:'Automation Agent',status:'idle',icon:'⚙️'},
-        ]).map((a,i) => h('div', { className:'agent-card', key:i },
-          h('div', { className:'agent-icon' }, a.icon || '○'),
-          h('div', { className:'agent-info' },
-            h('div', { className:'agent-name' }, a.name),
-            h('div', { className:'agent-status '+(a.status) }, a.status)
-          )
-        ))
-      )
-    ),
     /* Recent Activity */
     h('div', null,
       h('div', { className:'home-section-title' }, h('span', { className:'bar' }), 'Recent Activity'),
-      store.agentLog.slice(-6).reverse().map((item,i) =>
-        h('div', { className:'activity-row', key:i },
-          h('span', { className:'activity-ts' }, item.ts || item.timestamp || '--:--'),
-          h('span', { className:'activity-msg' }, item.msg || item.message || '')
+      store.agentLog.length === 0
+        ? h('div', { style:{fontSize:11,color:'var(--muted)',padding:'4px 0'} }, '\u2014 No recent activity')
+        : store.agentLog.slice(-6).reverse().map((item,i) =>
+          h('div', { className:'activity-row', key:i },
+            h('span', { className:'activity-ts' }, (item.ts || item.timestamp || '--:--').slice(-5)),
+            h('span', { className:'activity-msg' }, item.msg || item.message || '')
+          )
         )
-      )
     ),
     /* Quick Actions */
     h('div', null,
@@ -444,21 +407,6 @@ function MissionControl() {
           h('div', { className:'icon' }, icons[i]),
           h('div', { className:'name' }, name.split(' ').slice(0,2).join(' ')),
           h('div', { className:'desc' }, name)
-        ))
-      )
-    ),
-    /* Suggested Actions */
-    h('div', null,
-      h('div', { className:'home-section-title' }, h('span', { className:'bar' }), 'Suggestions'),
-      h('div', { className:'suggestion-grid' },
-        [
-          {icon:'📈',text:'Memory database increased 15%',action:'Review cleanup'},
-          {icon:'🚀',text:'New Railway deployment detected',action:'Review health'},
-          {icon:'⚡',text:'GPU temp at 78°C — monitoring',action:'Check cooling'},
-        ].map((s,i) => h('div', { className:'suggestion-item', key:i, onClick:()=>{const inp=document.getElementById('chat-input');if(inp){inp.value=s.action+' ';inp.focus();}} },
-          h('span', { className:'sug-icon' }, s.icon),
-          h('span', { className:'sug-text' }, s.text),
-          h('span', { className:'sug-action' }, s.action+' →')
         ))
       )
     )
@@ -516,10 +464,7 @@ function RightPanel() {
     h(ActiveModel),
     h(AgentFeed),
     h(EnhancedModelRouting),
-    h(MemoryPanel),
-    h(TradingSystemPanel),
-    h(Automations),
-    h(Alerts)
+    h(MemoryPanel)
   );
 }
 
@@ -528,8 +473,7 @@ function SystemStatus() {
   const bars = [
     {l:'CPU',v:m.cpu||0},{l:'RAM',v:m.ram||0},{l:'GPU',v:m.gpu||0},{l:'VRAM',v:m.vram||0},{l:'Disk',v:m.disk||0}
   ];
-  const provs = store.providers.length ? store.providers :
-    [{name:'Ollama',status:'offline'},{name:'OpenRouter',status:'online'},{name:'Gemini',status:'online'},{name:'Groq',status:'online'},{name:'NVIDIA',status:'online'}];
+  const provs = (store.routing || []).map(r => ({name:r.provider, status:r.status}));
   return h('div', { className:'rp-section' },
     h('div', { className:'glass' },
       h('div', { className:'sec-title' }, h('span', { className:'dot' }), 'System'),
@@ -544,15 +488,20 @@ function SystemStatus() {
       m.uptime ? h('div', { style:{fontSize:'9px',color:'var(--muted)',marginTop:1,fontFamily:'var(--font-mono)'} },
         '↑ '+m.uptime+'  ·  '+m.processes+' procs'
       ) : null,
-      h('div', { className:'provider-list' },
+      provs.length ? h('div', { className:'provider-list' },
         provs.map(p => h('span', { className:'prov-item '+p.status, key:p.name }, h('span', { className:'prov-dot' }), p.name))
-      )
+      ) : null
     )
   );
 }
 
 function ActiveModel() {
-  const m = store.model;
+  const online = (store.routing || []).find(r => r.status === 'online');
+  const m = {
+    name: online ? (online.model || '\u2014') : '\u2014',
+    provider: online ? online.provider : '\u2014',
+    context: '\u2014', latency: '\u2014', tokens: '\u2014',
+  };
   const Meta = (p) => h('div', { className:'model-stat' }, h('span', { className:'val' }, p.val), h('span', { className:'lbl' }, p.lbl));
   return h('div', { className:'rp-section' },
     h('div', { className:'glass' },
@@ -583,44 +532,25 @@ function AgentFeed() {
 }
 
 function EnhancedModelRouting() {
-  const r = store.routing || {};
-  const router = r.router || {name:'Ternary Bonsai 8B',status:'active'};
-  const primary = r.primary || {name:'DeepSeek V4 Pro',status:'standby',tokens:0};
-  const fallback = r.fallback || {name:'GLM 5.1',status:'standby',tokens:0};
-  const lastRoute = r.last_route || 'router';
-  const totalRoutes = r.total_routes || 0;
+  const rows = store.routing || [];
   return h('div', { className:'rp-section' },
     h('div', { className:'glass' },
       h('div', { className:'sec-title' }, h('span', { className:'dot' }), 'Model Routing'),
-      h('div', { className:'route-flow' },
-        h('div', { className:'route-node'+(lastRoute==='router'?' active-route':'') },
-          h('span', { className:'role-badge' }, 'Router'),
-          h('span', { className:'model-name' }, router.name),
-          h('span', { className:'model-status '+(router.status) }, router.status)
-        ),
-        h('div', { className:'route-arrow' }, '\u2193'),
-        h('div', { className:'route-node'+(lastRoute==='primary'?' active-route':'') },
-          h('span', { className:'role-badge' }, 'Primary'),
-          h('span', { className:'model-name' }, primary.name),
-          h('span', { className:'model-status '+(primary.status) }, primary.status+(primary.tokens?' · '+primary.tokens+'tok':''))
-        ),
-        h('div', { className:'route-arrow' }, '\u2193'),
-        h('div', { className:'route-node'+(lastRoute==='fallback'?' active-route':'') },
-          h('span', { className:'role-badge' }, 'Fallback'),
-          h('span', { className:'model-name' }, fallback.name),
-          h('span', { className:'model-status '+(fallback.status) }, fallback.status)
-        ),
-        totalRoutes > 0 ? h('div', { className:'route-flow-line' },
-          h('span', null, 'Routes: '), h('span', { className:'stat' }, totalRoutes),
-          h('span', null, '\u00b7 Last: '), h('span', { className:'stat' }, lastRoute)
-        ) : null
-      )
+      rows.length === 0
+        ? h('div', { className:'empty-state' }, h('div', { className:'icon' }, '\u25C7'), h('div', null, '\u2014'))
+        : rows.map((r,i) => h('div', { className:'route-node'+(r.status==='online'?' active-route':''), key:(r.provider||'')+'-'+i },
+            h('span', { className:'role-badge' }, r.provider || '\u2014'),
+            h('span', { className:'model-name' }, r.model || '\u2014'),
+            h('span', { className:'model-status '+r.status }, r.status)
+          ))
     )
   );
 }
 
 function MemoryPanel() {
   const m = store.memory || {};
+  const projects = m.projects || [];
+  const recent = m.recent || [];
   return h('div', { className:'rp-section' },
     h('div', { className:'glass' },
       h('div', { className:'sec-title' }, h('span', { className:'dot' }), 'Memory'),
@@ -630,77 +560,18 @@ function MemoryPanel() {
       ),
       h('div', { className:'mem-section' },
         h('div', { className:'mem-label' }, 'Projects'),
-        h('div', null, (m.projects||['JARVIS']).map((p,i) => h('span', { className:'mem-tag', key:i }, p)))
+        h('div', null, projects.length
+          ? projects.map((p,i) => h('span', { className:'mem-tag', key:i }, p))
+          : '\u2014')
       ),
       h('div', { className:'mem-section' },
         h('div', { className:'mem-label' }, 'Recent'),
-        (m.recent||['System initialized']).slice(0,3).map((r,i) =>
-          h('div', { className:'mem-item', key:i }, typeof r === 'string' ? r : r.text||JSON.stringify(r))
-        )
+        recent.length === 0
+          ? h('div', null, '\u2014')
+          : recent.slice(0,3).map((r,i) =>
+              h('div', { className:'mem-item', key:i }, typeof r === 'string' ? r : r.text||JSON.stringify(r))
+            )
       )
-    )
-  );
-}
-
-function TradingSystemPanel() {
-  const eco = store.ecosystem || {};
-  const items = [
-    {label:'Railway', status:eco.railway?.status||'unknown'},
-    {label:'API', status:eco.api?.status||'unknown'},
-    {label:'Broker', status:eco.broker?.status||'unknown'},
-    {label:'OpenBB', status:eco.openbb?.status||'unknown'},
-    {label:'Position Registry', status:eco.position_registry?.status||'unknown'},
-    {label:'Event Bus', status:eco.event_bus?.status||'unknown'},
-  ];
-  const latency = eco.system_latency || {};
-  return h('div', { className:'rp-section' },
-    h('div', { className:'glass' },
-      h('div', { className:'sec-title' }, h('span', { className:'dot', style:{background:'var(--gold)'} }), 'Ecosystem'),
-      items.map((item,i) => h('div', { className:'eco-item', key:i },
-        h('span', { className:'eco-label' }, item.label),
-        h('span', { className:'eco-status '+item.status }, item.status)
-      )),
-      (latency.current || latency.average) ? h('div', { style:{marginTop:4,paddingTop:4,borderTop:'1px solid var(--border)',fontSize:'9px',color:'var(--muted)',fontFamily:'var(--font-mono)'} },
-        'Latency: '+latency.current+'ms avg  ·  Peak: '+latency.peak+'ms'
-      ) : null,
-      eco.last_trade ? h('div', { style:{marginTop:2,fontSize:'9px',color:'var(--muted)',fontFamily:'var(--font-mono)'} },
-        'Last trade: '+eco.last_trade
-      ) : null
-    )
-  );
-}
-
-function Automations() {
-  const a = store.automations;
-  return h('div', { className:'rp-section' },
-    h('div', { className:'glass' },
-      h('div', { className:'sec-title' }, h('span', { className:'dot' }), 'Automations'),
-      a.length === 0
-        ? h('div', { className:'empty-state' }, h('div', { className:'icon' }, '\u2699'), h('div', null, 'No automations'))
-        : a.slice(0,6).map(t => h('div', { className:'auto-item', key:t.id||t.name },
-            h('span', { className:'auto-status '+t.status }, t.status || 'scheduled'),
-            h('span', { className:'auto-name' }, t.name)
-          ))
-    )
-  );
-}
-
-function Alerts() {
-  const a = store.alerts;
-  if (a.length === 0) return h('div', { className:'rp-section' },
-    h('div', { className:'glass', style:{borderColor:'rgba(34,197,94,0.2)'} },
-      h('div', { className:'sec-title' }, h('span', { className:'dot', style:{background:'var(--green)'} }), 'Alerts'),
-      h('div', { style:{fontSize:11,color:'var(--green)',padding:'4px 0'} }, '\u2713 All systems operational')
-    )
-  );
-  const critical = a.some(x => x.type === 'critical' || x.type === 'error');
-  return h('div', { className:'rp-section' },
-    h('div', { className:'glass' },
-      h('div', { className:'sec-title' }, h('span', { className:'dot', style:{background:critical?'var(--red)':'var(--amber)'} }), 'Alerts'),
-      a.slice(0,5).map((x,i) => h('div', { className:'alert-item '+(x.type||'warning'), key:i },
-        h('span', { className:'alert-icon' }, x.type==='error'||x.type==='critical'?'\u26A0':'!'),
-        h('span', { className:'alert-msg' }, x.message)
-      ))
     )
   );
 }
@@ -715,7 +586,7 @@ function CommandPalette() {
   const actions = [
     {group:'Navigate',items:[{icon:'\uD83D\uDCDD',name:'Search Conversations',action:'search conv'},{icon:'\uD83E\uDDE0',name:'Search Memory',action:'search mem'},{icon:'\u2699',name:'Open Settings',action:'settings'}]},
     {group:'Launch',items:[{icon:'\uD83D\uDD0D',name:'Research Market',action:'Research Market'},{icon:'\uD83D\uDCC4',name:'Analyze Repository',action:'Analyze repository'},{icon:'\uD83D\uDCCA',name:'Generate Report',action:'Generate report'},{icon:'\u2699',name:'Create Automation',action:'Create automation'}]},
-    {group:'System',items:[{icon:'\uD83D\uDEE0\uFE0F',name:'Monitor Railway',action:'Monitor Railway'},{icon:'\uD83D\uDCC8',name:'Check OpenBB',action:'Check OpenBB'},{icon:'\uD83D\uDCBB',name:'Switch Model',action:'switch model'},{icon:'\uD83D\uDE80',name:'Run Research',action:'Run deep research'}]},
+    {group:'System',items:[{icon:'\uD83D\uDEE0\uFE0F',name:'Check System Status',action:'system status'},{icon:'\uD83E\uDDE9',name:'List Reminders',action:'list reminders'},{icon:'\uD83D\uDCBB',name:'Switch Model',action:'switch model'},{icon:'\uD83D\uDE80',name:'Run Research',action:'Run deep research'}]},
   ];
 
   const flat = actions.flatMap(g => g.items);

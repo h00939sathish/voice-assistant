@@ -202,6 +202,11 @@ class ProviderRegistry:
         self.openrouter = OpenRouterProvider()
         self.opencode = OpenCodeProvider()
         self.freellmapi = FreeLLMAPIProvider()
+        self._last_health_results: list[dict[str, Any]] = []
+
+    def get_last_health_results(self) -> list[dict[str, Any]]:
+        """Results of the most recent health check: [{provider, ok, model}]."""
+        return [dict(r) for r in self._last_health_results]
 
     def get_all_providers(self) -> list[dict[str, Any]]:
         return [
@@ -265,6 +270,13 @@ class ProviderRegistry:
 
     def run_health_checks(self, emit_status=None):
         print("   Running background API health checks...")
+        results: list[dict[str, Any]] = [
+            {
+                "provider": "ollama",
+                "ok": bool(self.ollama.available),
+                "model": self.ollama.model_name,
+            }
+        ]
 
         groq_client = self.groq.client
         if groq_client:
@@ -275,10 +287,20 @@ class ProviderRegistry:
                     max_tokens=1,
                     timeout=3.0,
                 )
+                results.append(
+                    {"provider": "groq", "ok": True, "model": "llama-3.1-8b-instant"}
+                )
             except Exception as e:
                 print(
                     f"   [!] Groq health check failed. Disabling. ({type(e).__name__})"
                 )
+                results.append(
+                    {"provider": "groq", "ok": False, "model": "llama-3.1-8b-instant"}
+                )
+        else:
+            results.append(
+                {"provider": "groq", "ok": False, "model": "llama-3.1-8b-instant"}
+            )
 
         gemini_client = self.gemini.client
         if gemini_client:
@@ -287,10 +309,16 @@ class ProviderRegistry:
                     model=GEMINI_MODEL,
                     contents="ping",
                 )
+                results.append({"provider": "gemini", "ok": True, "model": GEMINI_MODEL})
             except Exception as e:
                 print(
                     f"   [!] Gemini health check failed. Disabling. ({type(e).__name__})"
                 )
+                results.append(
+                    {"provider": "gemini", "ok": False, "model": GEMINI_MODEL}
+                )
+        else:
+            results.append({"provider": "gemini", "ok": False, "model": GEMINI_MODEL})
 
         nvidia_client = self.nvidia.client
         if nvidia_client:
@@ -301,10 +329,16 @@ class ProviderRegistry:
                     max_tokens=1,
                     timeout=3.0,
                 )
+                results.append({"provider": "nvidia", "ok": True, "model": NVIDIA_MODEL})
             except Exception as e:
                 print(
                     f"   [!] Nvidia health check failed. Disabling. ({type(e).__name__})"
                 )
+                results.append(
+                    {"provider": "nvidia", "ok": False, "model": NVIDIA_MODEL}
+                )
+        else:
+            results.append({"provider": "nvidia", "ok": False, "model": NVIDIA_MODEL})
 
         openrouter_client = self.openrouter.client
         if openrouter_client:
@@ -315,11 +349,22 @@ class ProviderRegistry:
                     max_tokens=1,
                     timeout=3.0,
                 )
+                results.append(
+                    {"provider": "openrouter", "ok": True, "model": OPENROUTER_MODEL}
+                )
             except Exception as e:
                 print(
                     f"   [!] OpenRouter health check failed. Disabling. ({type(e).__name__})"
                 )
+                results.append(
+                    {"provider": "openrouter", "ok": False, "model": OPENROUTER_MODEL}
+                )
+        else:
+            results.append(
+                {"provider": "openrouter", "ok": False, "model": OPENROUTER_MODEL}
+            )
 
+        self._last_health_results = results
         print("   Health checks completed.")
 
     async def with_timeout(

@@ -894,6 +894,10 @@ def main():
         chat_cb=lambda message, speak=False: assistant.submit_text_chat(
             message, speak=speak, source="dashboard"
         ),
+        # Live refs for real-data dashboard endpoints. The task executor is
+        # created asynchronously during initialize(), hence the lazy getter.
+        task_executor=lambda: assistant.task_executor,
+        llm_router=deps["llm"],
     )
 
     start_dashboard(args.dashboard_host, args.dashboard_port)

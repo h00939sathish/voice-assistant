@@ -146,6 +146,10 @@ class LLMRouter(ILLMProvider):
             target=self._provider_registry.run_health_checks, daemon=True
         ).start()
 
+    def get_provider_health(self) -> list[dict[str, Any]]:
+        """Last provider health-check results: [{provider, ok, model}]."""
+        return self._provider_registry.get_last_health_results()
+
     def register_status_callback(self, callback: Callable[[str], None]):
         self._status_callback = callback
 
