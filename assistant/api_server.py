@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import secrets
 import struct
 import time
 import wave
@@ -23,9 +24,11 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import (
+    Depends,
     FastAPI,
     File,
     HTTPException,
+    Request,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -33,7 +36,34 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="Buddy Assistant API")
+from config import assert_safe_bind, get_api_token
+
+TOKEN_HEADER = "X-Buddy-Token"
+HEALTH_PATH = "/api/health"
+
+
+def require_token(request: Request = None) -> None:
+    """FastAPI dependency: reject requests without a valid X-Buddy-Token.
+
+    Exemptions: CORS preflight (OPTIONS) and GET /api/health only.
+    Non-HTTP scopes (websocket handshakes) are not HTTP-token gated here;
+    FastAPI invokes this dependency with no args for websocket routes.
+    """
+    if request is None or request.scope.get("type") != "http":
+        return
+    if request.method == "OPTIONS":
+        return
+    if request.url.path == HEALTH_PATH:
+        return
+    provided = request.headers.get(TOKEN_HEADER, "")
+    expected = get_api_token()
+    if not provided or not secrets.compare_digest(
+        provided.encode("utf-8"), expected.encode("utf-8")
+    ):
+        raise HTTPException(status_code=401, detail="Invalid or missing API token")
+
+
+app = FastAPI(title="Buddy Assistant API", dependencies=[Depends(require_token)])
 
 BUDDY_PATH = os.environ.get("BUDDY_PATH", str(Path(__file__).resolve().parent.parent))
 
@@ -434,6 +464,12 @@ class StreamingVAD:
 @app.get("/")
 async def root():
     return {"buddy": "online", "version": "1.0", "state": _state}
+
+
+@app.get(HEALTH_PATH)
+async def health():
+    """Unauthenticated liveness probe (the only route exempt from token auth)."""
+    return {"status": "ok"}
 
 
 @app.get("/api/status")
@@ -1370,4 +1406,6 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.environ.get("BUDDY_API_PORT", "8765"))
-    uvicorn.run(app, host="127.0.0.1", port=port, log_config=None)
+    host = "127.0.0.1"
+    assert_safe_bind(host)
+    uvicorn.run(app, host=host, port=port, log_config=None)

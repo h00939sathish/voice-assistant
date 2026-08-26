@@ -12,6 +12,7 @@
   <div id="root"></div>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script>window.__BUDDY_TOKEN__ = {{ buddy_token | tojson }};</script>
 {% raw %}
 <script>
 const store = {
@@ -36,7 +37,10 @@ function setState(k, v) {
 function subscribe(f) { store.listeners.add(f); return () => store.listeners.delete(f); }
 
 async function api(p, b) {
-  const o = { headers: { 'Content-Type': 'application/json' } };
+  const o = { headers: {
+    'Content-Type': 'application/json',
+    'X-Buddy-Token': window.__BUDDY_TOKEN__ || '',
+  } };
   if (b) { o.method = 'POST'; o.body = JSON.stringify(b); }
   try { const r = await fetch(p, o); return r.json(); } catch { return {}; }
 }
@@ -107,8 +111,12 @@ function applyObjectivePayload(o) {
   }
 }
 
+function sseURL(path) {
+  return path + '?token=' + encodeURIComponent(window.__BUDDY_TOKEN__ || '');
+}
+
 function connectMetricsSSE() {
-  const es = new EventSource('/api/metrics/stream');
+  const es = new EventSource(sseURL('/api/metrics/stream'));
   es.onmessage = e => {
     try {
       const d = JSON.parse(e.data);
@@ -121,7 +129,7 @@ function connectMetricsSSE() {
 /* Bridge events arrive as {type, data} envelopes (see DashboardBridge._push).
    Dispatch on type; unknown types are logged and ignored. */
 function connectSSE() {
-  const es = new EventSource('/stream');
+  const es = new EventSource(sseURL('/stream'));
   es.onmessage = e => {
     let d;
     try { d = JSON.parse(e.data); } catch { return; }

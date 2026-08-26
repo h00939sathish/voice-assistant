@@ -8,6 +8,7 @@ from assistant.events import EventBus, ResponseEvent
 from assistant.interfaces import IAudioManager, ILLMProvider, ISTTProvider, ITTSProvider
 from assistant.skill_router import SkillRouter
 from main import VoiceAssistant
+from tests.conftest import TEST_TOKEN, auth_headers
 
 
 @pytest.mark.asyncio
@@ -64,7 +65,11 @@ def test_dashboard_chat_endpoint_returns_callback_response():
             f"echo:{message}|speak={speak}"
         )
 
-        response = client.post("/api/chat", json={"message": "hello", "speak": True})
+        response = client.post(
+            "/api/chat",
+            json={"message": "hello", "speak": True},
+            headers=auth_headers(TEST_TOKEN),
+        )
 
         assert response.status_code == 200
         assert response.get_json() == {
@@ -82,7 +87,9 @@ def test_dashboard_chat_endpoint_rejects_empty_messages():
     try:
         dashboard_app._chat_callback = lambda message, speak=False: "unused"
 
-        response = client.post("/api/chat", json={"message": "   "})
+        response = client.post(
+            "/api/chat", json={"message": "   "}, headers=auth_headers(TEST_TOKEN)
+        )
 
         assert response.status_code == 400
         assert response.get_json()["ok"] is False

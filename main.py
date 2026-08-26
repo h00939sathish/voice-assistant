@@ -69,6 +69,7 @@ from config import (
     SESSION_IDLE_TIMEOUT,
     SOUNDS_DIR,
     WAKE_WORD_STARTUP_ENABLED,
+    assert_safe_bind,
 )
 from gui.tray import SystemTrayApp
 from assistant.vad import InterruptionVAD
@@ -900,6 +901,7 @@ def main():
         llm_router=deps["llm"],
     )
 
+    assert_safe_bind(args.dashboard_host)
     start_dashboard(args.dashboard_host, args.dashboard_port)
 
     event_bus.subscribe(StateChangeEvent, lambda e: update_ui(e.new_state))
@@ -973,6 +975,7 @@ def main():
 
             from assistant.api_server import app as api_app
 
+            assert_safe_bind("127.0.0.1")
             uvicorn.run(
                 api_app,
                 host="127.0.0.1",

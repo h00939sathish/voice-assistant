@@ -1,4 +1,5 @@
 from dashboard import app as dashboard_app
+from tests.conftest import TEST_TOKEN, auth_headers
 
 
 class StubBridge:
@@ -15,7 +16,7 @@ def test_companion_wake_triggers_existing_listener_when_idle(monkeypatch):
     monkeypatch.setattr(dashboard_app, "_wake_callback", lambda: calls.append("wake"))
 
     client = dashboard_app.app.test_client()
-    response = client.post("/api/companion/wake")
+    response = client.post("/api/companion/wake", headers=auth_headers(TEST_TOKEN))
 
     assert response.status_code == 200
     assert response.get_json() == {"accepted": True, "state": "LISTENING"}
@@ -28,7 +29,7 @@ def test_companion_wake_rejects_overlapping_activation(monkeypatch):
     monkeypatch.setattr(dashboard_app, "_wake_callback", lambda: calls.append("wake"))
 
     client = dashboard_app.app.test_client()
-    response = client.post("/api/companion/wake")
+    response = client.post("/api/companion/wake", headers=auth_headers(TEST_TOKEN))
 
     assert response.status_code == 409
     assert response.get_json() == {
@@ -44,7 +45,7 @@ def test_companion_wake_reports_unavailable_when_callback_missing(monkeypatch):
     monkeypatch.setattr(dashboard_app, "_wake_callback", None)
 
     client = dashboard_app.app.test_client()
-    response = client.post("/api/companion/wake")
+    response = client.post("/api/companion/wake", headers=auth_headers(TEST_TOKEN))
 
     assert response.status_code == 503
     assert response.get_json() == {
@@ -59,7 +60,7 @@ def test_companion_state_reports_current_state_for_reconnect(monkeypatch):
     monkeypatch.setattr(dashboard_app, "_wake_callback", lambda: None)
 
     client = dashboard_app.app.test_client()
-    response = client.get("/api/companion/state")
+    response = client.get("/api/companion/state", headers=auth_headers(TEST_TOKEN))
 
     assert response.status_code == 200
     payload = response.get_json()

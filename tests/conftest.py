@@ -12,6 +12,20 @@ from assistant.events import EventBus
 from assistant.interfaces import IAudioManager, ILLMProvider, ISTTProvider, ITTSProvider
 from assistant.skill_router import SkillRouter
 
+# Hermetic default for the whole suite: token-protected HTTP endpoints accept
+# this value without ever touching the real data/api_token file.
+TEST_TOKEN = "test-token-123"
+
+
+def auth_headers(token: str = TEST_TOKEN) -> dict[str, str]:
+    """Auth header for requests against Buddy's token-protected servers."""
+    return {"X-Buddy-Token": token}
+
+
+@pytest.fixture(autouse=True)
+def _buddy_api_token(monkeypatch):
+    monkeypatch.setenv("BUDDY_API_TOKEN", TEST_TOKEN)
+
 
 @pytest.fixture
 def event_bus():

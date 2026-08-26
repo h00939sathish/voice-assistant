@@ -6,6 +6,7 @@ Serves live data only: panels without a live source are removed, not faked.
 
 import json
 import logging
+import secrets
 import sqlite3
 import time
 from datetime import datetime
@@ -13,7 +14,7 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, render_template, request
 
-from config import USER_NAME
+from config import USER_NAME, get_api_token
 from gui.operator_dashboard import OperatorDashboard
 
 logger = logging.getLogger("buddy.dashboard")
@@ -40,6 +41,33 @@ app.config["TEMPLATES_AUTO_RELOAD"] = True
 # Telemetry
 from dashboard.telemetry import get_telemetry, TelemetryService
 _telemetry = get_telemetry()
+
+# Token auth: everything requires X-Buddy-Token except OPTIONS preflight,
+# GET /api/health, and the browser bootstrap surface ("/" + its static
+# assets) — the index route is what delivers the token to the browser JS.
+# All data/action APIs remain fully gated. The two SSE GET endpoints
+# additionally accept ?token= because EventSource cannot set headers.
+_SSE_QUERY_TOKEN_PATHS = {"/stream", "/api/metrics/stream"}
+_HEALTH_PATH = "/api/health"
+
+
+@app.before_request
+def _require_token():
+    if request.method == "OPTIONS":
+        return None
+    if request.path == _HEALTH_PATH:
+        return None
+    if request.path == "/" or request.endpoint == "static":
+        return None
+    provided = request.headers.get("X-Buddy-Token", "")
+    if not provided and request.path in _SSE_QUERY_TOKEN_PATHS:
+        provided = request.args.get("token", "")
+    expected = get_api_token()
+    if not provided or not secrets.compare_digest(
+        provided.encode("utf-8"), expected.encode("utf-8")
+    ):
+        return jsonify({"ok": False, "error": "Invalid or missing API token"}), 401
+    return None
 
 
 # ------------------------------------------------------------------
@@ -112,7 +140,13 @@ def _routing_rows() -> list:
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", buddy_token=get_api_token())
+
+
+@app.route("/api/health")
+def api_health():
+    """Unauthenticated liveness probe (the only route exempt from token auth)."""
+    return jsonify({"status": "ok"})
 
 
 # ------------------------------------------------------------------

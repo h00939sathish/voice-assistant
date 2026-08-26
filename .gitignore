@@ -60,6 +60,9 @@ Thumbs.db
 data/*.db
 data/*.jsonl
 
+# Secrets (never commit)
+data/api_token
+
 # Cache
 .spotify_cache/
 .superpowers/

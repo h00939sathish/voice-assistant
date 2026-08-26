@@ -2,10 +2,14 @@
 Configuration module for Buddy Voice Assistant
 """
 
+import logging
 import os
+import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables (force override system defaults)
 load_dotenv(override=True)
@@ -268,3 +272,51 @@ AUTHORITY_GATE_ENABLED = os.getenv("AUTHORITY_GATE_ENABLED", "true").lower() in 
 AUTHORITY_MIN_LEVEL = int(
     os.getenv("AUTHORITY_MIN_LEVEL", "3")
 )  # 1=LOW, 2=MEDIUM, 3=HIGH, 4=CRITICAL
+
+
+# ---------------------------------------------------------------------------
+# API token bootstrap + bind-host safety guard (shared by both HTTP servers)
+# ---------------------------------------------------------------------------
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def get_api_token() -> str:
+    """Return BUDDY_API_TOKEN from env, else load/create data/api_token.
+
+    Creates the file with secrets.token_urlsafe(32) on first call.
+    Logs only the PATH — never the token value.
+    """
+    env_token = os.getenv("BUDDY_API_TOKEN", "")
+    if env_token:
+        return env_token
+
+    token_path = BASE_DIR / "data" / "api_token"
+    try:
+        existing = token_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        existing = ""
+    if existing:
+        return existing
+
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_urlsafe(32)
+    # Owner-only permissions where the OS honours them (no-op on Windows ACLs).
+    fd = os.open(str(token_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(token)
+    logger.info("API token file ready at %s", token_path)
+    return token
+
+
+def assert_safe_bind(host: str) -> None:
+    """Refuse non-loopback binds unless BUDDY_API_TOKEN is explicitly set."""
+    host_norm = str(host or "").strip().lower()
+    if host_norm in _LOOPBACK_HOSTS:
+        return
+    if os.getenv("BUDDY_API_TOKEN"):
+        return
+    raise RuntimeError(
+        f"Refusing to bind non-loopback host '{host}' without BUDDY_API_TOKEN set. "
+        "Set BUDDY_API_TOKEN or keep the server on 127.0.0.1."
+    )

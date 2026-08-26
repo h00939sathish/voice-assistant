@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import dashboard.app as dashboard_app
 from assistant.task_executor import Task, TaskState, TaskStep
+from tests.conftest import TEST_TOKEN, auth_headers
 
 FICTIONAL_STRINGS = [
     "ternary bonsai",
@@ -89,7 +90,7 @@ def _assert_no_fictional_strings(payload_text: str) -> None:
 def test_objective_comes_from_running_task(monkeypatch):
     _wire_live(monkeypatch)
 
-    response = _client().get("/api/objective")
+    response = _client().get("/api/objective", headers=auth_headers(TEST_TOKEN))
 
     assert response.status_code == 200
     assert response.get_json() == {"objective": "draft report"}
@@ -99,7 +100,7 @@ def test_objective_comes_from_running_task(monkeypatch):
 def test_tasks_queue_reflects_task_executor(monkeypatch):
     _wire_live(monkeypatch)
 
-    response = _client().get("/api/tasks")
+    response = _client().get("/api/tasks", headers=auth_headers(TEST_TOKEN))
 
     assert response.status_code == 200
     tasks = response.get_json()
@@ -116,7 +117,7 @@ def test_tasks_queue_reflects_task_executor(monkeypatch):
 def test_model_routing_reflects_provider_health(monkeypatch):
     _wire_live(monkeypatch)
 
-    response = _client().get("/api/model-routing")
+    response = _client().get("/api/model-routing", headers=auth_headers(TEST_TOKEN))
 
     assert response.status_code == 200
     rows = response.get_json()
@@ -128,7 +129,7 @@ def test_memory_owner_name_from_config(monkeypatch):
     _wire_live(monkeypatch)
     monkeypatch.setattr(dashboard_app, "USER_NAME", "TestOwner")
 
-    response = _client().get("/api/memory")
+    response = _client().get("/api/memory", headers=auth_headers(TEST_TOKEN))
 
     assert response.status_code == 200
     payload = response.get_json()
@@ -139,7 +140,7 @@ def test_memory_owner_name_from_config(monkeypatch):
 def test_status_reports_bridge_state_and_live_tasks(monkeypatch):
     _wire_live(monkeypatch)
 
-    response = _client().get("/api/status")
+    response = _client().get("/api/status", headers=auth_headers(TEST_TOKEN))
 
     assert response.status_code == 200
     payload = response.get_json()
@@ -165,7 +166,7 @@ def test_agent_log_served_from_bridge_events(monkeypatch):
     monkeypatch.setattr(dashboard_app, "_task_executor_source", FakeExecutor())
     monkeypatch.setattr(dashboard_app, "_llm_router", FakeRouter())
 
-    response = _client().get("/api/agent/log")
+    response = _client().get("/api/agent/log", headers=auth_headers(TEST_TOKEN))
 
     assert response.status_code == 200
     entries = response.get_json()
@@ -184,7 +185,7 @@ def test_removed_panel_routes_return_404(monkeypatch):
     client = _client()
 
     for route in REMOVED_ROUTES:
-        response = client.get(route)
+        response = client.get(route, headers=auth_headers(TEST_TOKEN))
         assert response.status_code == 404, f"{route} should be removed (404)"
 
 
@@ -199,18 +200,18 @@ def test_missing_live_refs_yield_empty_states_not_errors(monkeypatch):
     monkeypatch.setattr(dashboard_app, "_llm_router", None)
     client = _client()
 
-    objective = client.get("/api/objective")
+    objective = client.get("/api/objective", headers=auth_headers(TEST_TOKEN))
     assert objective.status_code == 200
     assert objective.get_json() == {"objective": None}
 
-    tasks = client.get("/api/tasks")
+    tasks = client.get("/api/tasks", headers=auth_headers(TEST_TOKEN))
     assert tasks.status_code == 200
     assert tasks.get_json() == []
 
-    routing = client.get("/api/model-routing")
+    routing = client.get("/api/model-routing", headers=auth_headers(TEST_TOKEN))
     assert routing.status_code == 200
     assert routing.get_json() == []
 
-    agent_log = client.get("/api/agent/log")
+    agent_log = client.get("/api/agent/log", headers=auth_headers(TEST_TOKEN))
     assert agent_log.status_code == 200
     assert agent_log.get_json() == []
