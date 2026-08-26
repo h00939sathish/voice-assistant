@@ -1426,4 +1426,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("BUDDY_API_PORT", "8765"))
     host = "127.0.0.1"
     assert_safe_bind(host)
-    uvicorn.run(app, host=host, port=port, log_config=None)
+    uvicorn.run(app, host=host, port=port, log_config=None, access_log=False)
