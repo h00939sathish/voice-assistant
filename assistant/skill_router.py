@@ -216,9 +216,6 @@ class SkillRouter:
                 print(f"   ⚠️ Skill error ({name}): {e}")
         return None
 
-    async def _llm_classify(self, text: str) -> str | None:
-        return None
-
     def get_skill_names(self) -> list[str]:
         """Get list of loaded skill names."""
         return SkillsRegistry.get_skill_names()

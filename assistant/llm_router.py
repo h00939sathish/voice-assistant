@@ -1,11 +1,10 @@
 """
 LLM Router - Handles local (Ollama) and online (Groq, Nvidia, OpenRouter, Gemini) models
 
-This is the main interface module. Provider implementations, fallback logic,
-and caching have been extracted to separate modules:
+This is the main interface module. Provider implementations and fallback logic
+have been extracted to separate modules:
 - llm_providers.py: Provider classes and client management
 - llm_fallback.py: Fallback logic and provider priority
-- llm_cache.py: Response caching layer
 """
 
 import asyncio
@@ -16,7 +15,6 @@ from typing import Any
 
 from assistant.fact_extractor import FactExtractor
 from assistant.interfaces import ILLMProvider
-from assistant.llm_cache import LLMResponseCache
 from assistant.llm_fallback import FallbackChain, FallbackConfig, determine_intent
 from assistant.llm_providers import (
     ProviderRegistry,
@@ -40,7 +38,7 @@ from config import (
 
 
 class LLMRouter(ILLMProvider):
-    """Routes between multiple LLM providers with fallback logic and cache"""
+    """Routes between multiple LLM providers with fallback logic"""
 
     _SKIP_MEMORY_PHRASES = {
         "time",
@@ -115,7 +113,6 @@ class LLMRouter(ILLMProvider):
         self._provider_registry = ProviderRegistry()
         self._fallback_config = FallbackConfig(prefer_local)
         self._fallback_chain = FallbackChain(self._fallback_config)
-        self._cache = LLMResponseCache()
 
         self._dynamic_tool_discovery = DYNAMIC_TOOL_DISCOVERY_ENABLED
         self._tool_discovery_top_k = max(1, DYNAMIC_TOOL_DISCOVERY_TOP_K)
