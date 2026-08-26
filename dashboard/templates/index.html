@@ -69,6 +69,17 @@ async function fetchInitial() {
   try { const s = await api('/api/status'); if (s.state) setState('state', s.state);
     if (Array.isArray(s.tasks)) setState('tasks', s.tasks);
   } catch {}
+  try { applyObjectivePayload(await api('/api/objective')); } catch {}
+  try { const m = await api('/api/memory'); if (m && m.name) setState('memory', m); } catch {}
+  try { const r = await api('/api/model-routing'); if (Array.isArray(r)) setState('routing', r); } catch {}
+  try { const l = await api('/api/agent/log'); if (Array.isArray(l)) setState('agentLog', l); } catch {}
+}
+
+async function refreshTasks() {
+  try { const t = await api('/api/tasks'); if (Array.isArray(t)) setState('tasks', t); } catch {}
+}
+
+async function refreshObjective() {
   try {
     const o = await api('/api/objective');
     if (o && ('objective' in o)) {
@@ -77,13 +88,23 @@ async function fetchInitial() {
         : { title:'', progress:0, step:'', status:'idle' });
     }
   } catch {}
-  try { const m = await api('/api/memory'); if (m && m.name) setState('memory', m); } catch {}
-  try { const r = await api('/api/model-routing'); if (Array.isArray(r)) setState('routing', r); } catch {}
-  try { const l = await api('/api/agent/log'); if (Array.isArray(l)) setState('agentLog', l); } catch {}
 }
 
-async function refreshTasks() {
-  try { const t = await api('/api/tasks'); if (Array.isArray(t)) setState('tasks', t); } catch {}
+function nowTs() {
+  const n = new Date();
+  return String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');
+}
+
+function pushAgentLog(msg) {
+  setState('agentLog', store.agentLog.concat({ts:nowTs(), msg:msg}).slice(-50));
+}
+
+function applyObjectivePayload(o) {
+  if (o && ('objective' in o)) {
+    setState('objective', o.objective
+      ? { title:o.objective, progress:0, step:'', status:'running' }
+      : { title:'', progress:0, step:'', status:'idle' });
+  }
 }
 
 function connectMetricsSSE() {
@@ -97,20 +118,45 @@ function connectMetricsSSE() {
   es.onerror = () => { es.close(); setTimeout(connectMetricsSSE, 5000); };
 }
 
+/* Bridge events arrive as {type, data} envelopes (see DashboardBridge._push).
+   Dispatch on type; unknown types are logged and ignored. */
 function connectSSE() {
   const es = new EventSource('/stream');
   es.onmessage = e => {
-    try {
-      const d = JSON.parse(e.data);
-      if (d.state) setState('state', d.state);
-      if (d.message) setState('messages', store.messages.concat({role:d.message.role==='user'?'user':'assistant',text:d.message.text,ts:Date.now()}).slice(-100));
-      if (d.tool) {
-        const now = new Date();
-        const ts = String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
-        setState('agentLog', store.agentLog.concat({ts:ts, msg:(d.tool.tool_name||'tool')+' '+(d.tool.action||'event')}).slice(-50));
+    let d;
+    try { d = JSON.parse(e.data); } catch { return; }
+    const p = d ? d.data : null;
+    switch (d ? d.type : undefined) {
+      case 'state':
+        if (p && p.state) setState('state', p.state);
+        break;
+      case 'message':
+        if (p && p.text) setState('messages', store.messages.concat({role:p.role==='user'?'user':'assistant',text:p.text,ts:Date.now()}).slice(-100));
+        break;
+      case 'status':
+        if (p && p.text) pushAgentLog(p.text);
+        break;
+      case 'tool': {
+        if (!p || !p.tool_name) break;
+        let msg = p.tool_name+' '+(p.action||'event');
+        if (p.summary) msg += ': '+p.summary;
+        else if (p.error) msg += ': '+p.error;
+        pushAgentLog(msg);
+        break;
       }
-      if (d.task) refreshTasks();
-    } catch {}
+      case 'task':
+        refreshTasks();
+        refreshObjective();
+        break;
+      case 'subsystem':
+        if (p && p.subsystem) pushAgentLog('system '+p.subsystem+': '+(p.state||'unknown')+(p.detail?' ('+p.detail+')':''));
+        break;
+      case 'confirmation':
+        if (p && p.tool_name) pushAgentLog(p.tool_name+' confirmation '+(p.action||'requested'));
+        break;
+      default:
+        console.debug('[dashboard] ignoring SSE event type:', d ? d.type : d);
+    }
   };
   es.onerror = () => { es.close(); setTimeout(connectSSE, 5000); };
 }
