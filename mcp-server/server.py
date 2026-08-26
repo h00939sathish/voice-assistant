@@ -7,12 +7,30 @@ Speaks the standard MCP stdio JSON-RPC protocol.
 
 import asyncio
 import json
+import os
 import sys
+from pathlib import Path
 
 import aiohttp
 
 BUDDY_API_URL = "http://localhost:8765"
 BUDDY_DASHBOARD_URL = "http://localhost:5050"
+
+
+def get_api_token() -> str:
+    """Token source: BUDDY_API_TOKEN env, else the repo's data/api_token file."""
+    token = os.getenv("BUDDY_API_TOKEN", "")
+    if token:
+        return token
+    token_file = Path(__file__).resolve().parents[1] / "data" / "api_token"
+    try:
+        return token_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def auth_headers() -> dict:
+    return {"X-Buddy-Token": get_api_token()}
 
 
 async def companion_wake() -> str:
@@ -35,12 +53,17 @@ async def call_buddy_api(
         async with aiohttp.ClientSession() as session:
             if method == "GET":
                 async with session.get(
-                    url, timeout=aiohttp.ClientTimeout(total=30)
+                    url,
+                    headers=auth_headers(),
+                    timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     return await resp.json()
             elif method == "POST":
                 async with session.post(
-                    url, json=data, timeout=aiohttp.ClientTimeout(total=60)
+                    url,
+                    json=data,
+                    headers=auth_headers(),
+                    timeout=aiohttp.ClientTimeout(total=60),
                 ) as resp:
                     return await resp.json()
     except Exception as e:
@@ -346,7 +369,10 @@ async def handle_tool_call(name: str, arguments: dict) -> str:
                     "file", audio_bytes, filename="audio.wav", content_type="audio/wav"
                 )
                 async with session.post(
-                    url, data=form, timeout=aiohttp.ClientTimeout(total=60)
+                    url,
+                    data=form,
+                    headers=auth_headers(),
+                    timeout=aiohttp.ClientTimeout(total=60),
                 ) as resp:
                     r = await resp.json()
             return json.dumps(r, indent=2)

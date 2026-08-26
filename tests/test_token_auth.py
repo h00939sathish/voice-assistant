@@ -61,22 +61,43 @@ def test_fastapi_health_is_exempt():
     assert response.status_code == 200
 
 
-def test_fastapi_websocket_unaffected_by_http_auth():
-    """Documents current scope: WS handshake is not HTTP-token gated (see report).
+def test_fastapi_websocket_wrong_token_rejected():
+    from fastapi import WebSocketDisconnect
 
-    Teardown may raise from the endpoint's receive loop after disconnect
-    (pre-existing behaviour under the test transport); the assertion covers
-    handshake + round-trip only.
-    """
+    for path in ("/ws", "/aionui"):
+        with pytest.raises(Exception) as excinfo:
+            with _api_client().websocket_connect(f"{path}?token=wrong"):
+                pass
+        assert isinstance(excinfo.value, WebSocketDisconnect), (
+            f"{path} should reject at handshake"
+        )
+        assert excinfo.value.code == 4401
+
+
+def test_fastapi_websocket_correct_token_accepted():
     client = _api_client()
     pong = None
     try:
-        with client.websocket_connect("/ws") as ws:
+        with client.websocket_connect(f"/ws?token={TOKEN}") as ws:
             ws.send_json({"type": "ping"})
             pong = ws.receive_json()
     except Exception:
+        # Teardown may raise from pre-existing disconnect handling under the
+        # test transport; only handshake + round-trip are asserted here.
         pass
     assert pong == {"type": "pong"}
+
+
+def test_fastapi_options_preflight_is_exempt():
+    response = _api_client().options("/api/status")
+
+    assert response.status_code == 405
+
+
+def test_fastapi_protected_post_without_token_rejected():
+    response = _api_client().post("/api/chat", json={"message": "hi"})
+
+    assert response.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +180,100 @@ def test_flask_index_injects_token_for_js():
 
     assert "window.__BUDDY_TOKEN__" in html
     assert TOKEN in html
+
+
+def test_flask_options_preflight_is_exempt():
+    response = _dash_client().options("/api/status")
+
+    assert response.status_code == 200
+
+
+def test_flask_protected_post_without_token_rejected():
+    response = _dash_client().post("/api/wake")
+
+    assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# In-repo MCP clients attach the auth header (Fix round 2)
+# ---------------------------------------------------------------------------
+
+
+def _load_mcp_module(rel_path: str, name: str):
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / rel_path
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_buddy_mcp_client_attaches_token_header(monkeypatch):
+    import asyncio
+
+    mod = _load_mcp_module("mcp-server/server.py", "buddy_mcp_server")
+    monkeypatch.setenv("BUDDY_API_TOKEN", TOKEN)
+
+    captured = {}
+
+    class _FakeResp:
+        async def json(self):
+            return {"ok": True}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _FakeSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def get(self, url, **kwargs):
+            captured.update(kwargs)
+            captured["url"] = url
+            return _FakeResp()
+
+    monkeypatch.setattr(mod.aiohttp, "ClientSession", _FakeSession)
+
+    result = asyncio.run(mod.call_buddy_api("/api/status"))
+
+    assert result == {"ok": True}
+    assert captured["headers"]["X-Buddy-Token"] == TOKEN
+
+
+def test_companion_ready_probe_attaches_token_header(monkeypatch):
+    mod = _load_mcp_module(
+        "mcp-server/jarvis_companion_mcp.py", "jarvis_companion_mcp_mod"
+    )
+    monkeypatch.setenv("BUDDY_API_TOKEN", TOKEN)
+
+    recorded = {}
+
+    class _CM:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        recorded.update({k.lower(): v for k, v in request.header_items()})
+        return _CM()
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+
+    assert mod._dashboard_is_ready() is True
+    assert recorded.get("x-buddy-token") == TOKEN
 
 
 # ---------------------------------------------------------------------------

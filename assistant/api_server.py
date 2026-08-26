@@ -46,8 +46,8 @@ def require_token(request: Request = None) -> None:
     """FastAPI dependency: reject requests without a valid X-Buddy-Token.
 
     Exemptions: CORS preflight (OPTIONS) and GET /api/health only.
-    Non-HTTP scopes (websocket handshakes) are not HTTP-token gated here;
-    FastAPI invokes this dependency with no args for websocket routes.
+    Non-HTTP scopes are authenticated separately at WebSocket accept time
+    (see _ws_handshake_ok); this dependency no-ops for those scopes.
     """
     if request is None or request.scope.get("type") != "http":
         return
@@ -61,6 +61,18 @@ def require_token(request: Request = None) -> None:
         provided.encode("utf-8"), expected.encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="Invalid or missing API token")
+
+
+async def _ws_handshake_ok(websocket: WebSocket) -> bool:
+    """WebSocket clients cannot set headers — they pass ?token= on the URL."""
+    provided = websocket.query_params.get("token", "")
+    expected = get_api_token()
+    return bool(provided) and secrets.compare_digest(
+        provided.encode("utf-8"), expected.encode("utf-8")
+    )
+
+
+WS_REJECT_CODE = 4401
 
 
 app = FastAPI(title="Buddy Assistant API", dependencies=[Depends(require_token)])
@@ -909,6 +921,9 @@ async def websocket_endpoint(websocket: WebSocket):
       {"type": "error",      "error": "..."}
       {"type": "pong"}
     """
+    if not await _ws_handshake_ok(websocket):
+        await websocket.close(code=WS_REJECT_CODE)
+        return
     await websocket.accept()
     active_connections.append(websocket)
     vad = StreamingVAD()
@@ -1085,6 +1100,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.websocket("/aionui")
 async def aionui_ws_endpoint(websocket: WebSocket):
+    if not await _ws_handshake_ok(websocket):
+        await websocket.close(code=WS_REJECT_CODE)
+        return
     await websocket.accept()
     aionui_connections.append(websocket)
     last_seq = 0

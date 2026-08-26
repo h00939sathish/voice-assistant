@@ -19,6 +19,18 @@ AUTOSTART_WAIT_SECONDS = float(os.getenv("JARVIS_AUTOSTART_WAIT_SECONDS", "20"))
 mcp = FastMCP("jarvis-companion")
 
 
+def get_api_token() -> str:
+    """Token source: BUDDY_API_TOKEN env, else the repo's data/api_token file."""
+    token = os.getenv("BUDDY_API_TOKEN", "")
+    if token:
+        return token
+    token_file = PROJECT_ROOT / "data" / "api_token"
+    try:
+        return token_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def _autostart_enabled() -> bool:
     value = os.getenv("JARVIS_COMPANION_AUTOSTART", "true").strip().lower()
     return value not in {"0", "false", "no", "off"}
@@ -60,7 +72,9 @@ def _wait_for_dashboard() -> bool:
 
 def _dashboard_is_ready() -> bool:
     url = f"{JARVIS_DASHBOARD_URL.rstrip('/')}/api/companion/state"
-    request = urllib.request.Request(url, method="GET")
+    request = urllib.request.Request(
+        url, method="GET", headers={"X-Buddy-Token": get_api_token()}
+    )
     try:
         with urllib.request.urlopen(request, timeout=2):
             return True
@@ -74,7 +88,10 @@ def _request_json(method: str, endpoint: str, autostart: bool = True) -> dict:
         url,
         data=b"{}" if method == "POST" else None,
         method=method,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "X-Buddy-Token": get_api_token(),
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=5) as response:
