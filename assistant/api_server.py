@@ -34,9 +34,10 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from assistant.authority_gate import ActionOutcome, AuthorityGate
 from config import assert_safe_bind, get_api_token
 
 TOKEN_HEADER = "X-Buddy-Token"
@@ -293,6 +294,62 @@ async def _execute_tool(
     else:
         raw = await instance.handle(args.get("command", tool_name), context)
     return {"ok": True, "status": "ok", "result": raw}
+
+
+def _get_authority_gate(assistant):
+    """Reuse the live ToolRunner's gate so policy/min-level stay single-source."""
+    skill_router = getattr(assistant, "skill_router", None)
+    runner = getattr(skill_router, "tool_runner", None) or getattr(
+        assistant, "tool_runner", None
+    )
+    if runner is not None and hasattr(runner, "_get_gate"):
+        return runner._get_gate()
+    return AuthorityGate()
+
+
+def _remote_gate_response(assistant, tool_name: str, args: dict[str, Any]):
+    """Enforce the authority gate for non-interactive HTTP callers.
+
+    Remote requests have no human confirmation channel attached, so a
+    confirm-outcome action is never dispatched (202) and the underlying
+    executor is left untouched; policy-blocked actions return 403. Only
+    read-only classification/audit APIs are used — never gate.check() —
+    so the voice path's pending-approval state is untouched.
+    """
+    gate = _get_authority_gate(assistant)
+    risk = gate.classify_risk(tool_name, args)
+    outcome = ActionOutcome.from_risk(risk, gate.min_level)
+
+    if outcome == ActionOutcome.BLOCKED:
+        gate.log_action(tool_name, args, was_approved=False, risk_level=risk)
+        return JSONResponse(
+            status_code=403,
+            content={
+                "status": "blocked",
+                "tool": tool_name,
+                "risk": risk.name,
+                "detail": (
+                    f"{risk.name}-risk action '{tool_name}' denied by safety policy"
+                ),
+            },
+        )
+
+    if outcome == ActionOutcome.CONFIRM:
+        gate.log_action(tool_name, args, was_approved=False, risk_level=risk)
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "requires_confirmation",
+                "tool": tool_name,
+                "risk": risk.name,
+                "detail": (
+                    "Remote callers have no interactive confirmation channel; "
+                    "run this action locally to approve it."
+                ),
+            },
+        )
+
+    return None
 
 
 def _set_wake_word_enabled(assistant, enabled: bool) -> bool:
@@ -614,6 +671,9 @@ async def run_skill(req: SkillRunRequest):
         assistant = _get_assistant()
         args = dict(req.params or {})
         args.setdefault("command", req.skill_name)
+        gated = _remote_gate_response(assistant, req.skill_name, args)
+        if gated is not None:
+            return gated
         return await _execute_tool(assistant, req.skill_name, args)
     except HTTPException:
         raise
@@ -626,6 +686,9 @@ async def buddy_tool(req: BuddyToolRequest):
     try:
         assistant = _get_assistant()
         tool_name, args = _normalize_tool_request(req)
+        gated = _remote_gate_response(assistant, tool_name, args)
+        if gated is not None:
+            return gated
         return await _execute_tool(assistant, tool_name, args)
     except HTTPException:
         raise
@@ -653,10 +716,20 @@ async def desktop_execute(req: DesktopExecuteRequest):
     """Execute desktop automation action via skill router."""
     try:
         assistant = _get_assistant()
-        set_state("THINKING")
         target = f" {req.target}" if req.target else ""
         params = f" with {req.params}" if req.params else ""
         command = f"{req.action}{target}{params}".strip()
+        gate_args: dict[str, Any] = {"action": str(req.action), "command": command}
+        if req.target:
+            gate_args["target"] = str(req.target)
+        if req.params:
+            gate_args["params"] = json.dumps(req.params)
+        gated = _remote_gate_response(
+            assistant, str(req.action).strip().lower(), gate_args
+        )
+        if gated is not None:
+            return gated
+        set_state("THINKING")
         result = await _run_chat_pipeline(
             assistant, command, speak=False, source="api_desktop"
         )
@@ -675,6 +748,9 @@ async def desktop_screenshot():
     """Take screenshot via skill router."""
     try:
         assistant = _get_assistant()
+        gated = _remote_gate_response(assistant, "desktop", {"action": "screenshot"})
+        if gated is not None:
+            return gated
         if hasattr(assistant, "skill_router"):
             result = assistant.skill_router.run_skill(
                 "desktop", {"action": "screenshot"}
@@ -690,6 +766,9 @@ async def desktop_windows():
     """List open windows via skill router."""
     try:
         assistant = _get_assistant()
+        gated = _remote_gate_response(assistant, "desktop", {"action": "list_windows"})
+        if gated is not None:
+            return gated
         if hasattr(assistant, "skill_router"):
             result = assistant.skill_router.run_skill(
                 "desktop", {"action": "list_windows"}
