@@ -195,6 +195,112 @@ def test_flask_protected_post_without_token_rejected():
 
 
 # ---------------------------------------------------------------------------
+# Task 7: CORS locked to loopback origins
+# ---------------------------------------------------------------------------
+
+
+def _has_acao(response) -> bool:
+    names = {name.lower() for name in response.headers.keys()}
+    return "access-control-allow-origin" in names
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://127.0.0.1:5050",
+        "http://localhost:5050",
+        "http://127.0.0.1:8765",
+        "http://localhost:8765",
+    ],
+)
+def test_fastapi_cors_preflight_loopback_origin_gets_acao(origin):
+    response = _api_client().options(
+        "/api/status",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.headers.get("Access-Control-Allow-Origin") == origin
+
+
+def test_fastapi_cors_preflight_disallowed_origin_lacks_acao():
+    response = _api_client().options(
+        "/api/status",
+        headers={
+            "Origin": "http://evil.example",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert not _has_acao(response)
+
+
+def test_fastapi_simple_get_allowed_origin_gets_acao():
+    response = _api_client().get(
+        "/api/status",
+        headers={**auth_headers(TOKEN), "Origin": "http://localhost:5050"},
+    )
+
+    assert (
+        response.headers.get("Access-Control-Allow-Origin") == "http://localhost:5050"
+    )
+
+
+def test_flask_get_disallowed_origin_lacks_acao():
+    response = _dash_client().get(
+        "/api/status", headers={**auth_headers(TOKEN), "Origin": "http://evil.example"}
+    )
+
+    assert not _has_acao(response)
+
+
+def test_flask_get_allowed_origin_gets_acao():
+    response = _dash_client().get(
+        "/api/status",
+        headers={**auth_headers(TOKEN), "Origin": "http://127.0.0.1:5050"},
+    )
+
+    assert (
+        response.headers.get("Access-Control-Allow-Origin") == "http://127.0.0.1:5050"
+    )
+
+
+def test_flask_preflight_disallowed_origin_lacks_acao():
+    response = _dash_client().options(
+        "/api/status",
+        headers={
+            "Origin": "http://evil.example",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert not _has_acao(response)
+
+
+def test_flask_preflight_allowed_origin_gets_acao_and_header_allowlist():
+    response = _dash_client().options(
+        "/api/status",
+        headers={
+            "Origin": "http://localhost:5050",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "X-Buddy-Token, Content-Type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert (
+        response.headers.get("Access-Control-Allow-Origin") == "http://localhost:5050"
+    )
+    assert (
+        response.headers.get("Access-Control-Allow-Headers")
+        == "X-Buddy-Token, Content-Type"
+    )
+
+
+# ---------------------------------------------------------------------------
 # In-repo MCP clients attach the auth header (Fix round 2)
 # ---------------------------------------------------------------------------
 

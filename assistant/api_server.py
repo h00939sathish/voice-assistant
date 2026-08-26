@@ -33,6 +33,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -76,6 +77,19 @@ WS_REJECT_CODE = 4401
 
 
 app = FastAPI(title="Buddy Assistant API", dependencies=[Depends(require_token)])
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5050",
+        "http://localhost:5050",
+        "http://127.0.0.1:8765",
+        "http://localhost:8765",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["X-Buddy-Token", "Content-Type"],
+)
 
 BUDDY_PATH = os.environ.get("BUDDY_PATH", str(Path(__file__).resolve().parent.parent))
 

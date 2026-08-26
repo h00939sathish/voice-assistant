@@ -50,6 +50,8 @@ _telemetry = get_telemetry()
 _SSE_QUERY_TOKEN_PATHS = {"/stream", "/api/metrics/stream"}
 _HEALTH_PATH = "/api/health"
 
+_DASHBOARD_ORIGINS = {"http://127.0.0.1:5050", "http://localhost:5050"}
+
 
 @app.before_request
 def _require_token():
@@ -68,6 +70,15 @@ def _require_token():
     ):
         return jsonify({"ok": False, "error": "Invalid or missing API token"}), 401
     return None
+
+
+@app.after_request
+def _cors_lock(response):
+    origin = request.headers.get("Origin", "")
+    if origin in _DASHBOARD_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Headers"] = "X-Buddy-Token, Content-Type"
+    return response
 
 
 # ------------------------------------------------------------------
