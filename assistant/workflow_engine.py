@@ -65,9 +65,9 @@ class WorkflowEngine:
             step_id = step.get("id", "step")
             skill_name = step.get("skill")
             action = step.get("action")
+            text_for_step = step.get("text") or step.get("prompt") or action
             logger.info(f"Executing step '{step_id}': skill={skill_name}, action={action}")
 
-            # Simulate step execution / route to skill router if provided
             step_output = {
                 "step_id": step_id,
                 "skill": skill_name,
@@ -75,9 +75,13 @@ class WorkflowEngine:
                 "status": "completed",
             }
 
-            if skill_router and hasattr(skill_router, "execute_skill"):
+            if skill_router is not None:
                 try:
-                    res = await skill_router.execute_skill(skill_name, action, step.get("params", {}))
+                    res = await skill_router.execute(
+                        skill_name,
+                        text_for_step,
+                        {"source": "workflow", "workflow": name},
+                    )
                     step_output["result"] = res
                 except Exception as e:
                     step_output["status"] = "failed"
@@ -85,9 +89,12 @@ class WorkflowEngine:
 
             results.append(step_output)
 
+        overall_status = (
+            "completed" if all(r["status"] != "failed" for r in results) else "failed"
+        )
         return {
-            "status": "success",
+            "status": overall_status,
             "workflow": name,
             "total_steps": len(steps),
-            "step_results": results,
+            "steps": results,
         }

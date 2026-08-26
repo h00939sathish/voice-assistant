@@ -184,6 +184,10 @@ class SkillRouter:
             return True
         return False
 
+    async def execute(self, name: str, text: str, context: dict | None = None) -> str:
+        """Public entry point for direct skill invocation (workflows, APIs)."""
+        return await self._execute_skill(name, text, context or {})
+
     async def _execute_skill(
         self, name: str, text: str, context: dict[str, Any]
     ) -> str | SkillResponse | None:
