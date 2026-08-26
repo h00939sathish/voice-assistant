@@ -1,0 +1,18 @@
+# Good Morning Macro Routine
+name: "good_morning"
+description: "Fetches current weather, time, and system status"
+steps:
+  - id: "check_time"
+    skill: "time"
+    action: "get_time"
+    description: "Check current local time"
+
+  - id: "check_weather"
+    skill: "weather"
+    action: "get_weather"
+    description: "Fetch weather update"
+
+  - id: "system_status"
+    skill: "system_monitor"
+    action: "get_status"
+    description: "Check CPU and RAM usage"
