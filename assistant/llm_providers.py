@@ -982,3 +982,118 @@ async def chat_gemini(
     except Exception as e:
         print(f"   [!] Gemini: {e}")
         return None
+
+
+import asyncio
+
+async def stream_ollama(provider, messages, tools=None):
+    if not provider.available:
+        return
+    
+    model_name = getattr(provider, "model_name", None)
+    if not model_name and hasattr(provider, "model_names") and provider.model_names:
+        model_name = provider.model_names[0]
+    
+    # Provider is OllamaProvider, let's get the client. Normally it uses ollama module directly.
+    import ollama
+    client = ollama.Client(timeout=10.0)
+    
+    try:
+        response_stream = await asyncio.to_thread(
+            client.chat,
+            model=model_name,
+            messages=messages,
+            stream=True,
+            options={"temperature": 0.7}
+        )
+        
+        for chunk in response_stream:
+            if chunk.get("message", {}).get("content"):
+                yield chunk["message"]["content"]
+    except Exception as e:
+        raise e
+
+async def stream_gemini(provider, messages, tools=None):
+    if not provider.client:
+        return
+
+    prompt = chr(10).join([m["content"] for m in messages])
+
+    try:
+        response_stream = await asyncio.to_thread(
+            provider.client.models.generate_content,
+            model=getattr(provider, "model", "gemini-1.5-pro"),
+            contents=prompt,
+            config=provider.client.types.GenerateContentConfig(
+                temperature=0.7, 
+                system_instruction=messages[0]["content"] if messages and messages[0]["role"] == "system" else None
+            ),
+            stream=True
+        )
+        
+        for chunk in response_stream:
+            if chunk.text:
+                yield chunk.text
+    except Exception as e:
+        raise e
+
+async def stream_openai_compatible(client, model, messages, provider_name, tools=None):
+    if not client:
+        return
+
+    try:
+        completion = await asyncio.to_thread(
+            client.chat.completions.create,
+            model=model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1024,
+            stream=True,
+            extra_headers={"HTTP-Referer": "https://github.com/buddy-assistant"}
+            if provider_name == "OpenRouter"
+            else None,
+        )
+
+        for chunk in completion:
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+    except Exception as e:
+        raise e
+
+async def stream_groq(provider, messages, tools=None):
+    import os
+    model = getattr(provider, "model", None) or os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+    gen = stream_openai_compatible(provider.client, model, messages, "Groq", tools)
+    async for chunk in gen:
+        yield chunk
+
+async def stream_nvidia(provider, messages, tools=None):
+    model = getattr(provider, "model", "meta/llama-3.1-8b-instruct")
+    gen = stream_openai_compatible(provider.client, model, messages, "Nvidia", tools)
+    async for chunk in gen:
+        yield chunk
+
+async def stream_openrouter(provider, messages, tools=None):
+    model = getattr(provider, "model", "meta-llama/llama-3.1-8b-instruct:free")
+    gen = stream_openai_compatible(provider.client, model, messages, "OpenRouter", tools)
+    async for chunk in gen:
+        yield chunk
+
+async def stream_opencode(provider, messages, tools=None):
+    model = getattr(provider, "model", "qwen-2.5-coder-32b")
+    gen = stream_openai_compatible(provider.client, model, messages, "OpenCode", tools)
+    async for chunk in gen:
+        yield chunk
+
+async def stream_freellmapi(provider, messages, tools=None):
+    model = getattr(provider, "model", "gemini-1.5-pro")
+    gen = stream_openai_compatible(provider.client, model, messages, "FreeLLMAPI", tools)
+    async for chunk in gen:
+        yield chunk
+
+async def stream_lmstudio(provider, messages, tools=None):
+    model = "local-model"
+    gen = stream_openai_compatible(provider.client, model, messages, "LM Studio", tools)
+    async for chunk in gen:
+        yield chunk
+

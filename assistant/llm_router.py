@@ -874,6 +874,123 @@ class LLMRouter(ILLMProvider):
     ):
         return await chat_gemini(provider, build_messages_fn, user_message, history)
 
+
+    async def _stream_provider(self, name: str, method, messages: list[dict], tools=None):
+        if name == "Gemini":
+            return await method(self._provider_registry.gemini, messages, tools)
+        else:
+            provider_attr = name.lower().replace(" ", "")
+            provider_instance = getattr(self._provider_registry, provider_attr)
+            return await method(provider_instance, messages, tools)
+
+    async def stream_chat(
+        self, messages: list[dict], *, tools: list[dict] | None = None
+    ):
+        self._fallback_chain.reset()
+        
+        providers = self._provider_registry.get_all_providers()
+        base_providers = []
+        for p in providers:
+            pname = p["name"]
+            if pname == "Ollama":
+                available = p["provider"].available
+                handler = self._stream_ollama
+            elif pname == "LM Studio":
+                available = p["provider"].available
+                handler = self._stream_lmstudio
+            elif pname == "Groq":
+                available = p["provider"].client is not None
+                handler = self._stream_groq
+            elif pname == "Nvidia":
+                available = p["provider"].client is not None
+                handler = self._stream_nvidia
+            elif pname == "Gemini":
+                available = p["provider"].client is not None
+                handler = self._stream_gemini
+            elif pname == "OpenRouter":
+                available = p["provider"].client is not None
+                handler = self._stream_openrouter
+            elif pname == "OpenCode":
+                available = p["provider"].client is not None
+                handler = self._stream_opencode
+            elif pname == "FreeLLMAPI":
+                available = p["provider"].client is not None
+                handler = self._stream_freellmapi
+            else:
+                continue
+
+            base_providers.append(
+                {
+                    "name": pname,
+                    "handler": handler,
+                    "available": available,
+                    "latency_profile": p["latency"],
+                    "reasoning_strength": p["reasoning"],
+                    "local": p["local"],
+                }
+            )
+
+        # For stream_chat, we just use a general intent for sorting
+        sorted_providers = self._fallback_config.sort_providers(base_providers, "general")
+        
+        for name, method, is_avail in sorted_providers:
+            if not is_avail:
+                continue
+                
+            streamed_at_least_one = False
+            try:
+                # call the stream method
+                gen = await self._stream_provider(name, method, messages, tools)
+                if isinstance(gen, str):
+                    streamed_at_least_one = True
+                    yield gen
+                    return
+                async for chunk in gen:
+                    streamed_at_least_one = True
+                    yield chunk
+                return  # If we finished successfully, we are done
+            except Exception as e:
+                print(f"   [!] stream_chat failed for {name}: {e}")
+                if streamed_at_least_one:
+                    # propagated exception since we already yielded tokens
+                    raise e
+                    
+        self._fallback_chain.mark_all_failed()
+        self._emit_subsystem_health("llm", "down", "All stream providers failed")
+        yield self._fallback_chain.get_error_response()
+
+    async def _stream_ollama(self, provider, messages, tools):
+        from assistant.llm_providers import stream_ollama
+        return await stream_ollama(provider, messages, tools)
+
+    async def _stream_lmstudio(self, provider, messages, tools):
+        from assistant.llm_providers import stream_lmstudio
+        return await stream_lmstudio(provider, messages, tools)
+
+    async def _stream_groq(self, provider, messages, tools):
+        from assistant.llm_providers import stream_groq
+        return await stream_groq(provider, messages, tools)
+
+    async def _stream_nvidia(self, provider, messages, tools):
+        from assistant.llm_providers import stream_nvidia
+        return await stream_nvidia(provider, messages, tools)
+
+    async def _stream_openrouter(self, provider, messages, tools):
+        from assistant.llm_providers import stream_openrouter
+        return await stream_openrouter(provider, messages, tools)
+
+    async def _stream_opencode(self, provider, messages, tools):
+        from assistant.llm_providers import stream_opencode
+        return await stream_opencode(provider, messages, tools)
+        
+    async def _stream_freellmapi(self, provider, messages, tools):
+        from assistant.llm_providers import stream_freellmapi
+        return await stream_freellmapi(provider, messages, tools)
+
+    async def _stream_gemini(self, provider, messages, tools):
+        from assistant.llm_providers import stream_gemini
+        return await stream_gemini(provider, messages, tools)
+
     def get_memory_stats(self) -> dict[str, Any]:
         stats = {}
         if self.long_term_memory:
