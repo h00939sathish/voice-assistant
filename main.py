@@ -70,7 +70,11 @@ from config import (
     WAKE_WORD_STARTUP_ENABLED,
     assert_safe_bind,
 )
-from gui.tray import SystemTrayApp
+
+try:
+    from gui.tray import SystemTrayApp
+except ImportError:  # Windows-only system tray (winreg/pystray); headless/CI safe
+    SystemTrayApp = None
 from assistant.vad import InterruptionVAD
 
 logger = get_logger("main")
@@ -1009,6 +1013,10 @@ def main():
     api_thread = threading.Thread(target=run_api_server, daemon=True)
     api_thread.start()
     logger.info(f"   🌐 API server: http://localhost:{api_port}")
+
+    if SystemTrayApp is None:
+        logger.critical("System tray unavailable on this platform (gui.tray import failed).")
+        return
 
     tray = SystemTrayApp(on_exit=on_exit, on_show=on_show)
 

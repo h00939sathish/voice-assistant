@@ -33,10 +33,17 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install system libs
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+
       - name: Install dependencies
         run: |
           pip install pytest pytest-asyncio
-          pip install -e .
+          pip install -e . --no-deps
+          pip install flask requests python-dotenv numpy sounddevice
+          pip install fastapi httpx python-multipart pyyaml aiohttp
+          pip install ollama openai groq google-generativeai google-genai
+          pip install edge-tts pyttsx3 psutil "mcp<2"
 
       - name: Install dashboard deps
         run: pip install flask requests python-dotenv

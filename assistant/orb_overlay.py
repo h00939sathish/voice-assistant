@@ -41,6 +41,9 @@ try:
 except ImportError:
     PYQT_AVAILABLE = False
     logger.warning("PyQt6 not installed. Orb overlay disabled.")
+    # Placeholder bases so the Qt widget subclasses below can still be
+    # *defined* (they are never instantiated when PyQt6 is unavailable).
+    QFrame = QWidget = QLabel = object
 
 from assistant.orb_animations import (
     STATE_COLORS,

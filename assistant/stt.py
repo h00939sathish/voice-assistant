@@ -2,6 +2,8 @@
 Speech-to-Text using faster-whisper with Silero VAD
 """
 
+from __future__ import annotations
+
 import concurrent.futures
 import gc
 import logging
@@ -12,8 +14,16 @@ import time
 from collections.abc import Callable
 
 import numpy as np
-import torch
-from faster_whisper import WhisperModel
+
+try:
+    import torch
+    from faster_whisper import WhisperModel
+
+    STT_MODELS_AVAILABLE = True
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    WhisperModel = None  # type: ignore[assignment,misc]
+    STT_MODELS_AVAILABLE = False
 
 from assistant.interfaces import IAudioManager, ISTTProvider
 
