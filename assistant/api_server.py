@@ -1497,17 +1497,18 @@ async def chat_stream(req: ChatRequest):
 
             if hasattr(assistant.llm, "stream_chat"):
                 async for chunk in assistant.llm.stream_chat(req.message):
-                    yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                    yield f"data: {json.dumps({'delta': chunk})}\n\n"
             else:
                 response = await _run_chat_pipeline(
                     assistant, req.message, speak=False, source="api_chat_stream"
                 )
-                yield f"data: {json.dumps({'chunk': response})}\n\n"
+                yield f"data: {json.dumps({'delta': response})}\n\n"
 
             set_state("IDLE")
-            yield f"data: {json.dumps({'done': True})}\n\n"
+            yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

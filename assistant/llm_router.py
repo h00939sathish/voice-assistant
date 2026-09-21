@@ -904,10 +904,15 @@ class LLMRouter(ILLMProvider):
             return await method(provider_instance, messages, tools)
 
     async def stream_chat(
-        self, messages: list[dict], *, tools: list[dict] | None = None
+        self,
+        user_message: str,
+        history: list[dict[str, str]] | None = None,
+        *,
+        tools: list[dict] | None = None,
     ):
         self._fallback_chain.reset()
-        
+        messages = self._build_messages(user_message, history or [])
+
         providers = self._provider_registry.get_all_providers()
         base_providers = []
         for p in providers:
@@ -981,35 +986,35 @@ class LLMRouter(ILLMProvider):
 
     async def _stream_ollama(self, provider, messages, tools):
         from assistant.llm_providers import stream_ollama
-        return await stream_ollama(provider, messages, tools)
+        return stream_ollama(provider, messages, tools)
 
     async def _stream_lmstudio(self, provider, messages, tools):
         from assistant.llm_providers import stream_lmstudio
-        return await stream_lmstudio(provider, messages, tools)
+        return stream_lmstudio(provider, messages, tools)
 
     async def _stream_groq(self, provider, messages, tools):
         from assistant.llm_providers import stream_groq
-        return await stream_groq(provider, messages, tools)
+        return stream_groq(provider, messages, tools)
 
     async def _stream_nvidia(self, provider, messages, tools):
         from assistant.llm_providers import stream_nvidia
-        return await stream_nvidia(provider, messages, tools)
+        return stream_nvidia(provider, messages, tools)
 
     async def _stream_openrouter(self, provider, messages, tools):
         from assistant.llm_providers import stream_openrouter
-        return await stream_openrouter(provider, messages, tools)
+        return stream_openrouter(provider, messages, tools)
 
     async def _stream_opencode(self, provider, messages, tools):
         from assistant.llm_providers import stream_opencode
-        return await stream_opencode(provider, messages, tools)
-        
+        return stream_opencode(provider, messages, tools)
+
     async def _stream_freellmapi(self, provider, messages, tools):
         from assistant.llm_providers import stream_freellmapi
-        return await stream_freellmapi(provider, messages, tools)
+        return stream_freellmapi(provider, messages, tools)
 
     async def _stream_gemini(self, provider, messages, tools):
         from assistant.llm_providers import stream_gemini
-        return await stream_gemini(provider, messages, tools)
+        return stream_gemini(provider, messages, tools)
 
     def get_memory_stats(self) -> dict[str, Any]:
         stats = {}
