@@ -17,28 +17,19 @@ logger = logging.getLogger(__name__)
 
 try:
     from PyQt6.QtCore import (
-        QEasingCurve,
         QPoint,
-        QPropertyAnimation,
-        QRect,
         Qt,
         QTimer,
-        pyqtSignal,
     )
     from PyQt6.QtGui import (
-        QBrush,
         QColor,
-        QFont,
-        QLinearGradient,
         QPainter,
-        QPainterPath,
         QPen,
         QRadialGradient,
     )
     from PyQt6.QtWidgets import (
         QApplication,
         QFrame,
-        QGraphicsDropShadowEffect,
         QLabel,
         QScrollArea,
         QSizePolicy,

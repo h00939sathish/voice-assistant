@@ -2,7 +2,6 @@
 Daemon Runner - Launches Buddy in headless server mode (for Docker / Cloud / Remote access).
 """
 
-import asyncio
 import logging
 import os
 import sys
@@ -16,6 +15,7 @@ def run_daemon(host: str = "0.0.0.0", port: int = 8000) -> None:
 
     try:
         import uvicorn
+
         from assistant.api_server import app as api_app
 
         uvicorn.run(

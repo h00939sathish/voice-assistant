@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 import platform
@@ -7,7 +8,6 @@ import shlex
 import subprocess
 import time
 
-import ctypes
 import pyautogui
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume

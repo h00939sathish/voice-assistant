@@ -957,11 +957,11 @@ class LLMRouter(ILLMProvider):
 
         # For stream_chat, we just use a general intent for sorting
         sorted_providers = self._fallback_config.sort_providers(base_providers, "general")
-        
+
         for name, method, is_avail in sorted_providers:
             if not is_avail:
                 continue
-                
+
             streamed_at_least_one = False
             try:
                 # call the stream method
@@ -979,7 +979,7 @@ class LLMRouter(ILLMProvider):
                 if streamed_at_least_one:
                     # propagated exception since we already yielded tokens
                     raise e
-                    
+
         self._fallback_chain.mark_all_failed()
         self._emit_subsystem_health("llm", "down", "All stream providers failed")
         yield self._fallback_chain.get_error_response()

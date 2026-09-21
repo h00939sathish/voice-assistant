@@ -1005,20 +1005,19 @@ async def chat_gemini(
         return None
 
 
-import asyncio
 
 async def stream_ollama(provider, messages, tools=None):
     if not provider.available:
         return
-    
+
     model_name = getattr(provider, "model_name", None)
     if not model_name and hasattr(provider, "model_names") and provider.model_names:
         model_name = provider.model_names[0]
-    
+
     # Provider is OllamaProvider, let's get the client. Normally it uses ollama module directly.
     import ollama
     client = ollama.Client(timeout=10.0)
-    
+
     try:
         response_stream = await asyncio.to_thread(
             client.chat,
@@ -1027,7 +1026,7 @@ async def stream_ollama(provider, messages, tools=None):
             stream=True,
             options={"temperature": 0.7}
         )
-        
+
         for chunk in response_stream:
             if chunk.get("message", {}).get("content"):
                 yield chunk["message"]["content"]
@@ -1046,12 +1045,12 @@ async def stream_gemini(provider, messages, tools=None):
             model=getattr(provider, "model", "gemini-1.5-pro"),
             contents=prompt,
             config=provider.client.types.GenerateContentConfig(
-                temperature=0.7, 
+                temperature=0.7,
                 system_instruction=messages[0]["content"] if messages and messages[0]["role"] == "system" else None
             ),
             stream=True
         )
-        
+
         for chunk in response_stream:
             if chunk.text:
                 yield chunk.text

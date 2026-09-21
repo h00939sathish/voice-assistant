@@ -2,10 +2,10 @@
 Workflow Engine - Parses and executes declarative YAML workflow routines.
 """
 
-import asyncio
 import logging
 from pathlib import Path
 from typing import Any
+
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ class WorkflowEngine:
         self._workflows.clear()
         for filepath in self.workflows_dir.glob("*.yaml"):
             try:
-                with open(filepath, "r", encoding="utf-8") as f:
+                with open(filepath, encoding="utf-8") as f:
                     data = yaml.safe_yaml_load(f) if hasattr(yaml, "safe_yaml_load") else yaml.safe_load(f)
                     if isinstance(data, dict) and "name" in data:
                         self._workflows[data["name"].lower()] = data

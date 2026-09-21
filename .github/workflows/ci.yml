@@ -39,7 +39,7 @@ jobs:
           pip install -e .
 
       - name: Install dashboard deps
-        run: pip install flask requests
+        run: pip install flask requests python-dotenv
 
       - name: Run tests
         run: >
@@ -54,5 +54,4 @@ jobs:
 
       - name: Test dashboard starts
         run: |
-          cd dashboard
-          python -c "from app import app; print('Dashboard imports OK: routes:', len([r for r in app.routes if r.endpoint and not r.endpoint.startswith('static')]))"
+          python -c "from dashboard.app import app; rules=list(app.url_map.iter_rules()); print('Dashboard imports OK: routes:', len(rules))"

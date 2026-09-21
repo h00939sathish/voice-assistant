@@ -4,7 +4,6 @@ Provides element inspection, find-by-name/role, click, and focused-element queri
 """
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger("buddy.uia_utils")
 
@@ -58,7 +57,7 @@ def _control_to_dict(control, depth=0, max_depth=3):
         return None
 
 
-def get_focused() -> Optional[dict]:
+def get_focused() -> dict | None:
     """Return info about the currently focused UI element."""
     if not _UIA_AVAILABLE:
         return None
@@ -70,7 +69,7 @@ def get_focused() -> Optional[dict]:
         return None
 
 
-def get_active_window() -> Optional[dict]:
+def get_active_window() -> dict | None:
     """Return info about the currently active window (top-level)."""
     if not _UIA_AVAILABLE:
         return None
@@ -151,7 +150,7 @@ def click_element(name: str) -> bool:
         return False
 
 
-def get_element_info(name: str) -> Optional[dict]:
+def get_element_info(name: str) -> dict | None:
     """Get details about a UI element by name."""
     if not _UIA_AVAILABLE:
         return None
@@ -164,7 +163,7 @@ def get_element_info(name: str) -> Optional[dict]:
     return None
 
 
-def wait_for_element(name: str, timeout: float = 5.0) -> Optional[dict]:
+def wait_for_element(name: str, timeout: float = 5.0) -> dict | None:
     """Wait for a UI element to appear (polling). Returns element info or None."""
     if not _UIA_AVAILABLE:
         return None

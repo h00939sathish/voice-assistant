@@ -3,15 +3,13 @@ Skill Router - Routes commands to skills using the registry.
 Hybrid approach: keyword matching first, then LLM classification.
 """
 
+import logging
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-import logging
 from pathlib import Path
 from typing import Any
 
 try:
-    import asyncio as _asyncio
-
     import ollama
 except ImportError:
     ollama = None

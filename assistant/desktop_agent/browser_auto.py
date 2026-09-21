@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 # Try to import playwright
 try:
-    from playwright.async_api import Browser, BrowserContext, Page, async_playwright
+    from playwright.async_api import async_playwright
 
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:

@@ -48,6 +48,12 @@ dev = [
     "pytest-asyncio>=0.24.0",
 ]
 
+[tool.setuptools.packages.find]
+# Flat-layout repo has many top-level dirs (gui, data, skills, AionUi,
+# assets, workflows) that are NOT installable packages. Restrict discovery
+# to the real packages so `pip install -e .` works (CI test job needs it).
+include = ["assistant*", "dashboard*"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py311"
