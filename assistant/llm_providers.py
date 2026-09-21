@@ -202,6 +202,11 @@ class ProviderRegistry:
         self.openrouter = OpenRouterProvider()
         self.opencode = OpenCodeProvider()
         self.freellmapi = FreeLLMAPIProvider()
+        self._last_health_results: list[dict[str, Any]] = []
+
+    def get_last_health_results(self) -> list[dict[str, Any]]:
+        """Results of the most recent health check: [{provider, ok, model}]."""
+        return [dict(r) for r in self._last_health_results]
 
     def get_all_providers(self) -> list[dict[str, Any]]:
         return [
@@ -265,6 +270,13 @@ class ProviderRegistry:
 
     def run_health_checks(self, emit_status=None):
         print("   Running background API health checks...")
+        results: list[dict[str, Any]] = [
+            {
+                "provider": "ollama",
+                "ok": bool(self.ollama.available),
+                "model": self.ollama.model_name,
+            }
+        ]
 
         groq_client = self.groq.client
         if groq_client:
@@ -275,10 +287,20 @@ class ProviderRegistry:
                     max_tokens=1,
                     timeout=3.0,
                 )
+                results.append(
+                    {"provider": "groq", "ok": True, "model": "llama-3.1-8b-instant"}
+                )
             except Exception as e:
                 print(
                     f"   [!] Groq health check failed. Disabling. ({type(e).__name__})"
                 )
+                results.append(
+                    {"provider": "groq", "ok": False, "model": "llama-3.1-8b-instant"}
+                )
+        else:
+            results.append(
+                {"provider": "groq", "ok": False, "model": "llama-3.1-8b-instant"}
+            )
 
         gemini_client = self.gemini.client
         if gemini_client:
@@ -287,10 +309,16 @@ class ProviderRegistry:
                     model=GEMINI_MODEL,
                     contents="ping",
                 )
+                results.append({"provider": "gemini", "ok": True, "model": GEMINI_MODEL})
             except Exception as e:
                 print(
                     f"   [!] Gemini health check failed. Disabling. ({type(e).__name__})"
                 )
+                results.append(
+                    {"provider": "gemini", "ok": False, "model": GEMINI_MODEL}
+                )
+        else:
+            results.append({"provider": "gemini", "ok": False, "model": GEMINI_MODEL})
 
         nvidia_client = self.nvidia.client
         if nvidia_client:
@@ -301,10 +329,16 @@ class ProviderRegistry:
                     max_tokens=1,
                     timeout=3.0,
                 )
+                results.append({"provider": "nvidia", "ok": True, "model": NVIDIA_MODEL})
             except Exception as e:
                 print(
                     f"   [!] Nvidia health check failed. Disabling. ({type(e).__name__})"
                 )
+                results.append(
+                    {"provider": "nvidia", "ok": False, "model": NVIDIA_MODEL}
+                )
+        else:
+            results.append({"provider": "nvidia", "ok": False, "model": NVIDIA_MODEL})
 
         openrouter_client = self.openrouter.client
         if openrouter_client:
@@ -315,11 +349,22 @@ class ProviderRegistry:
                     max_tokens=1,
                     timeout=3.0,
                 )
+                results.append(
+                    {"provider": "openrouter", "ok": True, "model": OPENROUTER_MODEL}
+                )
             except Exception as e:
                 print(
                     f"   [!] OpenRouter health check failed. Disabling. ({type(e).__name__})"
                 )
+                results.append(
+                    {"provider": "openrouter", "ok": False, "model": OPENROUTER_MODEL}
+                )
+        else:
+            results.append(
+                {"provider": "openrouter", "ok": False, "model": OPENROUTER_MODEL}
+            )
 
+        self._last_health_results = results
         print("   Health checks completed.")
 
     async def with_timeout(
@@ -498,6 +543,9 @@ async def _chat_ollama_with_model(
                         )
                     else:
                         messages.append(pending_message)
+                last_batch_should_halt, last_batch_halt_message = _halt_signal_from(
+                    execute_tool_batch_fn
+                )
 
             if last_batch_should_halt:
                 return last_batch_halt_message or "Action cancelled."
@@ -698,6 +746,21 @@ async def chat_opencode(
     )
 
 
+def _halt_signal_from(execute_tool_batch_fn):
+    """Read the router's post-batch halt flag from its bound execute method.
+
+    ``execute_tool_batch_fn`` is always ``LLMRouter._execute_tool_batch``, so its
+    ``__self__`` is the router that records ``_last_batch_should_halt`` when a
+    tool returns a gated status (requires_confirmation / blocked / clarify).
+    Providers extracted into free functions lost access to ``self``; this bridges
+    the signal back so a denied confirmation stops the loop instead of retrying.
+    """
+    owner = getattr(execute_tool_batch_fn, "__self__", None)
+    if owner is not None and getattr(owner, "_last_batch_should_halt", False):
+        return True, getattr(owner, "_last_batch_halt_message", "")
+    return False, ""
+
+
 async def chat_freellmapi(
     provider: FreeLLMAPIProvider,
     build_messages_fn,
@@ -891,6 +954,9 @@ async def chat_openai_compatible(
                         if pending_message["content"] is None:
                             pending_message["content"] = str(next(execution_iter, ""))
                         messages.append(pending_message)
+                    last_batch_should_halt, last_batch_halt_message = (
+                        _halt_signal_from(execute_tool_batch_fn)
+                    )
 
                 if last_batch_should_halt:
                     return last_batch_halt_message or "Action cancelled."
@@ -937,3 +1003,117 @@ async def chat_gemini(
     except Exception as e:
         print(f"   [!] Gemini: {e}")
         return None
+
+
+
+async def stream_ollama(provider, messages, tools=None):
+    if not provider.available:
+        return
+
+    model_name = getattr(provider, "model_name", None)
+    if not model_name and hasattr(provider, "model_names") and provider.model_names:
+        model_name = provider.model_names[0]
+
+    # Provider is OllamaProvider, let's get the client. Normally it uses ollama module directly.
+    import ollama
+    client = ollama.Client(timeout=10.0)
+
+    try:
+        response_stream = await asyncio.to_thread(
+            client.chat,
+            model=model_name,
+            messages=messages,
+            stream=True,
+            options={"temperature": 0.7}
+        )
+
+        for chunk in response_stream:
+            if chunk.get("message", {}).get("content"):
+                yield chunk["message"]["content"]
+    except Exception as e:
+        raise e
+
+async def stream_gemini(provider, messages, tools=None):
+    if not provider.client:
+        return
+
+    prompt = chr(10).join([m["content"] for m in messages])
+
+    try:
+        response_stream = await asyncio.to_thread(
+            provider.client.models.generate_content,
+            model=getattr(provider, "model", "gemini-1.5-pro"),
+            contents=prompt,
+            config=provider.client.types.GenerateContentConfig(
+                temperature=0.7,
+                system_instruction=messages[0]["content"] if messages and messages[0]["role"] == "system" else None
+            ),
+            stream=True
+        )
+
+        for chunk in response_stream:
+            if chunk.text:
+                yield chunk.text
+    except Exception as e:
+        raise e
+
+async def stream_openai_compatible(client, model, messages, provider_name, tools=None):
+    if not client:
+        return
+
+    try:
+        completion = await asyncio.to_thread(
+            client.chat.completions.create,
+            model=model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1024,
+            stream=True,
+            extra_headers={"HTTP-Referer": "https://github.com/buddy-assistant"}
+            if provider_name == "OpenRouter"
+            else None,
+        )
+
+        for chunk in completion:
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+    except Exception as e:
+        raise e
+
+async def stream_groq(provider, messages, tools=None):
+    import os
+    model = getattr(provider, "model", None) or os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+    gen = stream_openai_compatible(provider.client, model, messages, "Groq", tools)
+    async for chunk in gen:
+        yield chunk
+
+async def stream_nvidia(provider, messages, tools=None):
+    model = getattr(provider, "model", "meta/llama-3.1-8b-instruct")
+    gen = stream_openai_compatible(provider.client, model, messages, "Nvidia", tools)
+    async for chunk in gen:
+        yield chunk
+
+async def stream_openrouter(provider, messages, tools=None):
+    model = getattr(provider, "model", "meta-llama/llama-3.1-8b-instruct:free")
+    gen = stream_openai_compatible(provider.client, model, messages, "OpenRouter", tools)
+    async for chunk in gen:
+        yield chunk
+
+async def stream_opencode(provider, messages, tools=None):
+    model = getattr(provider, "model", "qwen-2.5-coder-32b")
+    gen = stream_openai_compatible(provider.client, model, messages, "OpenCode", tools)
+    async for chunk in gen:
+        yield chunk
+
+async def stream_freellmapi(provider, messages, tools=None):
+    model = getattr(provider, "model", "gemini-1.5-pro")
+    gen = stream_openai_compatible(provider.client, model, messages, "FreeLLMAPI", tools)
+    async for chunk in gen:
+        yield chunk
+
+async def stream_lmstudio(provider, messages, tools=None):
+    model = "local-model"
+    gen = stream_openai_compatible(provider.client, model, messages, "LM Studio", tools)
+    async for chunk in gen:
+        yield chunk
+

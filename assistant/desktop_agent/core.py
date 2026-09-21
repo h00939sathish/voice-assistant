@@ -40,7 +40,7 @@ except ImportError:
     logger.warning("psutil not installed - process control limited")
 
 try:
-    import pyperclip
+    import pyperclip  # noqa: F401 -- optional-dependency availability probe
 except ImportError:
     logger.warning("pyperclip not installed - clipboard limited")
 

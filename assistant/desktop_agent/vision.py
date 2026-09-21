@@ -33,7 +33,7 @@ except ImportError:
 
 # Try to import PIL
 try:
-    from PIL import Image, ImageGrab
+    from PIL import ImageGrab
 
     PIL_AVAILABLE = True
 except ImportError:
@@ -53,14 +53,14 @@ WINDOWS_OCR_AVAILABLE = False
 OCR_ENGINE = None
 
 try:
-    from azure.ai.vision import VisionSessionOptions, VisionSource
+    from azure.ai.vision import VisionSessionOptions, VisionSource  # noqa: F401
 
     WINDOWS_OCR_AVAILABLE = True
     OCR_ENGINE = "azure"
     logger.info("Windows OCR (Azure) available")
 except ImportError:
     try:
-        import pytesseract
+        import pytesseract  # noqa: F401 -- optional-dependency availability probe
 
         WINDOWS_OCR_AVAILABLE = True
         OCR_ENGINE = "tesseract"

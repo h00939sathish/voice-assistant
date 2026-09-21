@@ -5,7 +5,6 @@ Calendar Skill - Google Calendar integration
 import datetime
 import logging
 import os.path
-from datetime import timezone
 from typing import Any
 
 from google.auth.transport.requests import Request
@@ -137,7 +136,7 @@ class CalendarSkill(BaseSkill):
     def _list_events(self) -> str:
         """List next 5 upcoming events"""
         try:
-            now = datetime.datetime.now(timezone.utc).isoformat()
+            now = datetime.datetime.now(datetime.UTC).isoformat()
             events_result = (
                 self.service.events()
                 .list(

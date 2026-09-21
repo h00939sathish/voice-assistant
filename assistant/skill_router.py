@@ -3,15 +3,13 @@ Skill Router - Routes commands to skills using the registry.
 Hybrid approach: keyword matching first, then LLM classification.
 """
 
+import logging
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-import logging
 from pathlib import Path
 from typing import Any
 
 try:
-    import asyncio as _asyncio
-
     import ollama
 except ImportError:
     ollama = None
@@ -184,6 +182,10 @@ class SkillRouter:
             return True
         return False
 
+    async def execute(self, name: str, text: str, context: dict | None = None) -> str:
+        """Public entry point for direct skill invocation (workflows, APIs)."""
+        return await self._execute_skill(name, text, context or {})
+
     async def _execute_skill(
         self, name: str, text: str, context: dict[str, Any]
     ) -> str | SkillResponse | None:
@@ -210,9 +212,6 @@ class SkillRouter:
                 return await instance.handle(text, context)
             except Exception as e:
                 print(f"   ⚠️ Skill error ({name}): {e}")
-        return None
-
-    async def _llm_classify(self, text: str) -> str | None:
         return None
 
     def get_skill_names(self) -> list[str]:

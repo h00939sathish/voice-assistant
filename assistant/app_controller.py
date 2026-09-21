@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 import platform
+import shlex
 import subprocess
 import time
 
-import ctypes
 import pyautogui
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
@@ -337,7 +338,14 @@ class AppController:
         return f"I couldn't find an app named '{app_name}'"
 
     def launch_by_name(self, app_name: str) -> str:
-        """Launch an app: try AppScanner first, then APP_MAP, then direct."""
+        """Launch an app: try AppScanner first, then the curated APP_MAP allowlist.
+
+        The APP_MAP branch tokenizes the (constant) command into an argv list and
+        launches with ``shell=False``. Names that are not resolved by AppScanner
+        or APP_MAP are reported as not found — the raw user/LLM-supplied string is
+        never handed to a shell, which previously allowed arbitrary command
+        execution via the free-text ``Popen(app_name, shell=True)`` fallback.
+        """
         app_name_lower = app_name.lower().strip()
 
         result = self.launch_app(app_name_lower)
@@ -352,31 +360,25 @@ class AppController:
                 exe = command
                 break
 
-        if exe:
-            try:
-                if exe.startswith("ms-"):
-                    os.startfile(exe)
-                else:
-                    subprocess.Popen(
-                        exe,
-                        shell=True,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                return f"Opening {app_name_lower.title()}."
-            except Exception as e:
-                return f"Failed to open {app_name_lower}: {e}"
+        if not exe:
+            return f"I couldn't find an app named '{app_name_lower}'"
 
         try:
-            subprocess.Popen(
-                app_name_lower,
-                shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return f"Trying to open {app_name_lower.title()}."
+            if exe.startswith("ms-"):
+                os.startfile(exe)
+            else:
+                argv = shlex.split(exe)
+                if not argv:
+                    return f"I couldn't find an app named '{app_name_lower}'"
+                subprocess.Popen(
+                    argv,
+                    shell=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            return f"Opening {app_name_lower.title()}."
         except Exception as e:
-            return f"I couldn't find or open '{app_name_lower}'. ({e})"
+            return f"Failed to open {app_name_lower}: {e}"
 
     def keyboard_mute(self) -> str:
         try:

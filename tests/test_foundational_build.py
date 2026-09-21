@@ -231,6 +231,9 @@ async def test_llm_router_stops_after_confirmation_denial():
     router = LLMRouter()
     router._ollama_available = True
     router._check_ollama = lambda: True
+    # Exercise the Ollama tool-call path deterministically without depending on a
+    # running local Ollama server (the fallback loop gates on provider.available).
+    router._provider_registry.ollama._available = True
     router._dynamic_tool_discovery = False
     router._decide_action = AsyncMock(return_value="use_tools")
     router._classify_intent = AsyncMock(return_value="fast")

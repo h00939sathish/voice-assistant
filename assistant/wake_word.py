@@ -25,8 +25,6 @@ from config import (
     WAKE_WORD_THRESHOLD,
 )
 
-
-
 logger = logging.getLogger("buddy.wake_word")
 
 

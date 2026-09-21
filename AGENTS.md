@@ -44,68 +44,49 @@ This project is indexed by GitNexus as **voice-assistant** (78311 symbols, 12525
 
 # Session Anchors
 
-## 2026-06-23 — ARVIS OS Dashboard Redesign
+## 2026-08-26 — Dashboard reality pass (post-remediation Tasks 1–4)
 
-Full 3-column AI OS dashboard rebuild. React + Tailwind CSS v4 static site served from `dashboard/`. Three panels: JARVIS Core (left), AI Workspace (center), AI Brain (right). Serves as a companion overlay — loads separately from the Flask backend and communicates via REST + SSE.
+Facts below verified against code after Tasks 1–4 of the 2026-08 honesty/security
+remediation (`docs/superpowers/plans/2026-08-26-buddy-remediation.md`). The workflow
+engine executes for real; fictional dashboard panels were removed; remaining panels
+serve live data.
 
-Design ethos: deep navy/black, electric blue + subtle gold, glassmorphism, cinematic animations, reactive orb, live system metrics, memory panel, agent feed, automations grid. Every state change animated. Zero empty panels — every section shows live or default placeholder content.
+**Dashboard stack (actual):**
+- Plain Flask app in `dashboard/app.py`, run_server defaults to `127.0.0.1:5050` (CLI overrides: `--dashboard-host` / `--dashboard-port` in `assistant/cli_parser.py`). No Flask-SocketIO anywhere in the repo.
+- Frontend is a single `dashboard/templates/index.html`: React 18 UMD from unpkg, hand-rolled `h()` createElement helper, inline store — no Babel, no JSX transform, no bundler. (`dashboard/static/app.js` was deleted.)
+- Styling: hand-written CSS in `dashboard/static/style.css` (~940 lines). No Tailwind.
+- Live data: two SSE streams — `/stream` (bridge events) and `/api/metrics/stream` (system telemetry every 3 s).
+- Panels render live data only; sections without a live source are removed, not faked.
 
-**Key implementation decisions:**
-- Ran `npx @tailwindcss/cli init` on `dashboard/` to get Tailwind v4 working standalone
-- All CSS via `@import "tailwindcss"` in `style.css` — no JS bundler
-- WebSocket connection on `/ws/dashboard` from Flask-SocketIO for real-time data push
-- Flask backend already has `dashboard/` blueprint — injects `index.html` which loads `app.js`
-- Backend push model: emits JSON events (status, metrics, memory, agent_log, automation, alerts, orb)
-- Frontend `app.js` consumes events and mutates store, React re-renders on state changes
-- Architecture: no bundler, no JSX transform, no Vite — React loaded from CDN with Babel standalone for JSX in `<script type="text/babel">` tags within `templates/index.html`
-- Orb canvas renders via vanilla JS `requestAnimationFrame` (not React) for 60fps animation performance
-- Dash avatar: animated SVG path morphing between idle/listening/thinking/speaking/error states
+**Routes** (exact, from `dashboard/app.py`):
+- Page: `GET /`
+- SSE: `GET /stream`, `GET /api/metrics/stream`
+- REST: `GET /api/status`, `GET /api/objective`, `GET /api/tasks`, `GET /api/model-routing`, `GET /api/memory`, `GET /api/agent/log`, `GET /api/system/info`, `GET /api/operator`, `GET /api/execution_log`, `GET /jarvis/state` (Live2D/pet abstraction)
+- Actions: `POST /api/wake`, `POST /api/companion/wake`, `POST /api/clear_memory`, `POST /api/toggle_mic`, `POST /api/confirm`, `POST /api/chat`, `POST /api/reminder/<rid>/cancel`; `GET /api/companion/state`, `GET /api/reminders`
 
-- **Routes to keep** (from existing Flask `dashboard/app.py`):
-  - `/` serves `index.html`
-  - `/api/status` returns current state
-  - `/api/wake` triggers wake
-  - `/api/companion/wake` companion wake
-  - `/api/companion/state` companion state
-  - `/api/chat` text chat
-  - `/api/memory` memory panel data
-  - `/api/memory/<id>` individual memory
-  - `/api/metrics` system metrics
-  - `/api/agent/log` agent activity feed
-  - `/api/automations` automation list
-  - `/api/alerts` system alerts
-  - SSE endpoint `/api/events` for live streaming
+**Bridge event types** (server → client, SSE `{type, data}` envelopes from `assistant/dashboard_bridge.py`):
+- `state`, `message`, `status`, `tool`, `task`, `subsystem`, `confirmation`
+- plus `metrics` on the separate `/api/metrics/stream` endpoint
 
-- **WebSocket events** (server → client):
-  - `state` → `{state: "listening"|"thinking"|"speaking"|"error"}`
-  - `metrics` → `{cpu, ram, gpu, vram, disk, network}`
-  - `providers` → `[{name, status}]`
-  - `memory` → `{user, projects, recent, pinned}`
-  - `agent_log` → `{timestamp, message}`
-  - `automation` → `{id, name, status}`
-  - `alert` → `{type, message}`
-  - `transcript` → `{text, speaker}`
-
-**Component tree:**
+**Component tree** (`dashboard/templates/index.html`):
 ```
 App
-├── OrbCanvas (vanilla JS, canvas 2d)
-├── LeftPanel (JARVIS Core)
-│   ├── AvatarArea → orb container
+├── LeftPanel
+│   ├── MascotSection (DashMascot SVG + orb canvas + state badge + LiveObjective)
 │   ├── VoiceStatus
-│   ├── CurrentObjective
-│   └── TaskQueue
-├── CenterPanel (AI Workspace)
-│   ├── ConversationArea
-│   │   ├── MessageList
-│   │   └── ThinkingIndicator
-│   ├── QuickActionsBar
+│   └── EnhancedTaskQueue (live TaskExecutor data)
+├── CenterPanel
+│   ├── MissionControl (empty state) | Messages
+│   ├── ThinkingIndicator
+│   ├── QuickActions
 │   └── InputArea
-└── RightPanel (AI Brain)
-    ├── SystemStatus (CPU, RAM, GPU, disk, providers)
-    ├── ActiveModel
-    ├── MemoryPanel (user info, projects, recent/pinned memories)
-    ├── AgentFeed (live log)
-    ├── Automations (running/scheduled/completed/failed)
-    └── Alerts (errors, warnings, critical)
+├── RightPanel
+│   ├── SystemStatus (live metrics + provider health dots)
+│   ├── ActiveModel (online provider from health checks)
+│   ├── AgentFeed (live tool-event log)
+│   ├── EnhancedModelRouting (live provider health rows)
+│   └── MemoryPanel
+└── CommandPalette (Ctrl/Cmd+K)
 ```
+
+**Other runtime surfaces:** FastAPI control plane on `127.0.0.1:8765` (uvicorn thread, `BUDDY_API_PORT` env override, `assistant/api_server.py`); PyQt6 orb overlay + pystray system tray (`main.py`).

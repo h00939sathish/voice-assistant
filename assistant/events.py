@@ -134,6 +134,7 @@ class ConfirmationEvent(Event):
     tool_name: str = ""
     action: str = ""  # requested | approved | denied | timed_out
     dry_run: str = ""
+    confirmation_id: str = ""
 
 
 # ==================== Event Bus with JSONL Persistence ====================

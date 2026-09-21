@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -134,6 +135,11 @@ class ToolRunner:
     MAX_RETRIES = 2
     RETRY_BACKOFF_MS = 500  # doubles each attempt
 
+    # How long an externally-resolved confirmation (dashboard) stays pending
+    # before failing closed. The GUI callback and terminal transports keep
+    # their own tighter timeouts.
+    CONFIRM_TIMEOUT_SECONDS = 120.0
+
     def __init__(
         self,
         log_dir: Path | None = None,
@@ -149,6 +155,12 @@ class ToolRunner:
         self._confirmation_cb = confirmation_callback
         self._status_cb = status_callback
         self._allow_terminal_confirmation = allow_terminal_confirmation
+
+        # External async confirmation transport (e.g. the dashboard). When set,
+        # a confirmation is parked as a Future keyed by confirmation_id and
+        # resolved out-of-band via resolve_confirmation().
+        self._confirmation_resolver: Callable[[str, str], Any] | None = None
+        self._pending_confirms: dict[str, dict[str, Any]] = {}
 
         # Import authority gate lazily to avoid circular imports
         self._gate = None
@@ -219,15 +231,19 @@ class ToolRunner:
 
         if outcome == "confirm":
             dry_run = self._generate_dry_run(tool_name, args)
+            confirmation_id = uuid.uuid4().hex
             self._emit_status(f"⚠️ Awaiting confirmation: {tool_name}")
             self._publish_event(
                 "confirmation",
                 tool_name=tool_name,
                 action="requested",
                 dry_run=dry_run,
+                confirmation_id=confirmation_id,
             )
 
-            approved = await self._request_confirmation(tool_name, args, dry_run)
+            approved = await self._request_confirmation(
+                tool_name, args, dry_run, confirmation_id=confirmation_id
+            )
             if not approved:
                 result = ToolResult(
                     status=ToolStatus.REQUIRES_CONFIRMATION,
@@ -242,6 +258,7 @@ class ToolRunner:
                     tool_name=tool_name,
                     action="denied",
                     dry_run=dry_run,
+                    confirmation_id=confirmation_id,
                 )
                 self._write_log(result, user_intent)
                 return result
@@ -252,6 +269,7 @@ class ToolRunner:
                     tool_name=tool_name,
                     action="approved",
                     dry_run=dry_run,
+                    confirmation_id=confirmation_id,
                 )
 
         # ------ Step 2: Resolve skill instance ------
@@ -372,13 +390,19 @@ class ToolRunner:
     # ------------------------------------------------------------------
 
     async def _request_confirmation(
-        self, tool_name: str, args: dict[str, Any], dry_run: str
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        dry_run: str,
+        *,
+        confirmation_id: str | None = None,
     ) -> bool:
         """
         Request user confirmation through the best available transport:
-        1. GUI callback (PyQt6 dialog)
-        2. Terminal input() fallback
-        3. Auto-deny after 30s timeout
+        1. GUI callback (PyQt6 dialog) — sync bool or awaitable
+        2. External async resolver (dashboard) — park a Future, resolve out-of-band
+        3. Terminal input() fallback
+        4. Auto-deny when no non-blocking transport is configured
         """
         prompt = f"🔒 Confirm action?\n\n{dry_run}\n\nProceed? (yes/no)"
 
@@ -395,13 +419,19 @@ class ToolRunner:
             except Exception as e:
                 logger.warning(f"Confirmation callback error: {e}")
 
+        # 2. External async resolver (dashboard approve/deny).
+        if self._confirmation_resolver is not None and confirmation_id:
+            return await self._await_dashboard_confirmation(
+                tool_name, confirmation_id, dry_run
+            )
+
+        # 3./4. Terminal fallback, else fail closed.
         if not self._allow_terminal_confirmation:
             logger.info(
                 "No non-blocking confirmation transport is configured — auto-denying"
             )
             return False
 
-        # 2. Terminal fallback
         try:
             answer = await asyncio.wait_for(
                 asyncio.to_thread(input, prompt + " > "),
@@ -415,6 +445,42 @@ class ToolRunner:
             # No terminal attached
             logger.warning("No terminal available for confirmation — auto-denying")
             return False
+
+    async def _await_dashboard_confirmation(
+        self, tool_name: str, confirmation_id: str, dry_run: str
+    ) -> bool:
+        """Park a Future for this confirmation and await the dashboard decision."""
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._pending_confirms[confirmation_id] = {"future": fut, "loop": loop}
+        try:
+            self._confirmation_resolver(tool_name, confirmation_id)
+        except Exception as e:
+            logger.warning(f"Confirmation resolver error: {e}")
+            self._pending_confirms.pop(confirmation_id, None)
+            return False
+
+        try:
+            return bool(
+                await asyncio.wait_for(
+                    fut, timeout=self.CONFIRM_TIMEOUT_SECONDS
+                )
+            )
+        except TimeoutError:
+            logger.warning(
+                f"Confirmation for '{tool_name}' timed out after "
+                f"{self.CONFIRM_TIMEOUT_SECONDS:.0f}s — auto-denying"
+            )
+            self._publish_event(
+                "confirmation",
+                tool_name=tool_name,
+                action="timed_out",
+                dry_run=dry_run,
+                confirmation_id=confirmation_id,
+            )
+            return False
+        finally:
+            self._pending_confirms.pop(confirmation_id, None)
 
     # ------------------------------------------------------------------
     # Retry policy
@@ -497,6 +563,53 @@ class ToolRunner:
     def set_allow_terminal_confirmation(self, enabled: bool) -> None:
         """Enable/disable blocking terminal confirmation fallback."""
         self._allow_terminal_confirmation = bool(enabled)
+
+    def set_confirmation_resolver(
+        self, resolver: Callable[[str, str], Any] | None
+    ) -> None:
+        """
+        Register an external async confirmation transport.
+
+        ``resolver(tool_name, confirmation_id)`` is invoked (typically to notify
+        the dashboard) after a pending Future has been created; the decision is
+        delivered back via :meth:`resolve_confirmation`.
+        """
+        self._confirmation_resolver = resolver
+
+    def has_pending_confirmation(self, confirmation_id: str) -> bool:
+        """Whether a confirmation id is currently parked awaiting a decision."""
+        return confirmation_id in self._pending_confirms
+
+    def resolve_confirmation(
+        self, tool_name: str, confirmation_id: str, approved: bool
+    ) -> bool:
+        """
+        Resolve a parked confirmation from a non-loop thread (e.g. Flask).
+
+        Returns True if a matching pending confirmation was found and scheduled
+        for resolution, False if there was nothing pending for that id.
+        """
+        entry = self._pending_confirms.get(confirmation_id)
+        if entry is None:
+            logger.info(
+                f"resolve_confirmation: no pending confirmation for '{confirmation_id}'"
+            )
+            return False
+        fut: asyncio.Future = entry["future"]
+        loop = entry["loop"]
+
+        def _settle() -> None:
+            if not fut.done():
+                fut.set_result(bool(approved))
+
+        try:
+            if loop.is_closed():
+                return False
+            loop.call_soon_threadsafe(_settle)
+        except RuntimeError:
+            # Loop shut down between parking and resolving — fail closed.
+            return False
+        return True
 
     def _publish_event(self, event_kind: str, **payload: Any) -> None:
         """Publish typed runtime events for dashboards and observers."""

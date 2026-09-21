@@ -5,10 +5,8 @@ Orb Renderer - Rendering and drawing logic for the orb overlay.
 try:
     from PyQt6.QtCore import Qt
     from PyQt6.QtGui import (
-        QBrush,
         QColor,
         QPainter,
-        QPainterPath,
         QPen,
         QRadialGradient,
     )

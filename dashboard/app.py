@@ -1,24 +1,31 @@
 """
 Buddy Dashboard — lightweight Flask web server.
 Runs on http://localhost:5050 alongside the main assistant.
-Phase 3: Real telemetry, live objectives, mission control, ecosystem monitoring.
+Serves live data only: panels without a live source are removed, not faked.
 """
 
 import json
 import logging
+import secrets
 import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
-from threading import Lock
 
 from flask import Flask, Response, abort, jsonify, render_template, request
 
+from config import USER_NAME, get_api_token
 from gui.operator_dashboard import OperatorDashboard
 
 logger = logging.getLogger("buddy.dashboard")
 
 _bridge = None
+# Live TaskExecutor (object or zero-arg callable returning it — callable form
+# supports executors that are created asynchronously after startup).
+_task_executor_source = None
+# Live LLMRouter — source of provider health-check results.
+_llm_router = None
+
 _operator_dashboard = OperatorDashboard()
 _reminder_db: Path = Path(__file__).parent.parent / "cache" / "reminders.db"
 
@@ -35,91 +42,107 @@ app.config["TEMPLATES_AUTO_RELOAD"] = True
 from dashboard.telemetry import get_telemetry, TelemetryService
 _telemetry = get_telemetry()
 
-# Live state
-_objective = {
-    "id": "obj_1",
-    "title": "Research Trading Opportunities",
-    "progress": 0,
-    "step": "Initializing",
-    "status": "idle",
-    "eta": "",
-    "steps": [
-        {"name": "Fetching market data", "status": "pending"},
-        {"name": "Running OpenBB analysis", "status": "pending"},
-        {"name": "Generating strategy report", "status": "pending"},
-    ],
-}
+# Token auth: everything requires X-Buddy-Token except OPTIONS preflight,
+# GET /api/health, and the browser bootstrap surface ("/" + its static
+# assets) — the index route is what delivers the token to the browser JS.
+# All data/action APIs remain fully gated. The two SSE GET endpoints
+# additionally accept ?token= because EventSource cannot set headers.
+_SSE_QUERY_TOKEN_PATHS = {"/stream", "/api/metrics/stream"}
+_HEALTH_PATH = "/api/health"
 
-_tasks = [
-    {"id": "t1", "label": "OpenBB Scan", "status": "pending", "agent": "Research",
-     "ts": "", "duration": "", "priority": "high"},
-    {"id": "t2", "label": "Railway Health Check", "status": "pending", "agent": "Monitoring",
-     "ts": "", "duration": "", "priority": "medium"},
-    {"id": "t3", "label": "Memory Cleanup", "status": "pending", "agent": "Memory",
-     "ts": "", "duration": "", "priority": "low"},
-    {"id": "t4", "label": "Daily Security Scan", "status": "scheduled", "agent": "Security",
-     "ts": "", "duration": "", "priority": "medium"},
-]
-
-_agents = [
-    {"name": "Research Agent", "status": "idle", "icon": "🔍"},
-    {"name": "Memory Agent", "status": "idle", "icon": "🧠"},
-    {"name": "Monitoring Agent", "status": "running", "icon": "📡"},
-    {"name": "Automation Agent", "status": "idle", "icon": "⚙️"},
-]
-
-_ecosystem = {
-    "railway": {"status": "healthy", "last_check": ""},
-    "api": {"status": "online", "latency_ms": 0},
-    "broker": {"status": "disconnected", "last_trade": ""},
-    "openbb": {"status": "healthy", "last_run": ""},
-    "position_registry": {"status": "synchronized", "updated": ""},
-    "event_bus": {"status": "healthy", "events_24h": 0},
-    "last_strategy_run": "",
-    "last_trade": "",
-    "system_latency": {"current": 0, "average": 0, "peak": 0},
-}
-
-_model_routing = {
-    "router": {"name": "Ternary Bonsai 8B", "status": "active", "latency_ms": 45},
-    "primary": {"name": "DeepSeek V4 Pro", "status": "standby", "latency_ms": 2300,
-                "tokens": 0, "provider": "NVIDIA"},
-    "fallback": {"name": "GLM 5.1", "status": "standby", "latency_ms": 0,
-                 "tokens": 0, "provider": "OpenRouter"},
-    "last_route": "router",
-    "total_routes": 0,
-}
-
-_state_lock = Lock()
+_DASHBOARD_ORIGINS = {"http://127.0.0.1:5050", "http://localhost:5050"}
 
 
-def update_objective(**kw):
-    with _state_lock:
-        _objective.update(kw)
+@app.before_request
+def _require_token():
+    if request.method == "OPTIONS":
+        return None
+    if request.path == _HEALTH_PATH:
+        return None
+    if request.path == "/" or request.endpoint == "static":
+        return None
+    provided = request.headers.get("X-Buddy-Token", "")
+    if not provided and request.path in _SSE_QUERY_TOKEN_PATHS:
+        provided = request.args.get("token", "")
+    expected = get_api_token()
+    if not provided or not secrets.compare_digest(
+        provided.encode("utf-8"), expected.encode("utf-8")
+    ):
+        return jsonify({"ok": False, "error": "Invalid or missing API token"}), 401
+    return None
 
 
-def update_tasks(tasks):
-    with _state_lock:
-        _tasks.clear()
-        _tasks.extend(tasks)
+@app.after_request
+def _cors_lock(response):
+    origin = request.headers.get("Origin", "")
+    if origin in _DASHBOARD_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Headers"] = "X-Buddy-Token, Content-Type"
+    return response
 
 
-def update_agent(name, status):
-    with _state_lock:
-        for a in _agents:
-            if a["name"] == name:
-                a["status"] = status
-                break
+# ------------------------------------------------------------------
+# Live-state helpers
+# ------------------------------------------------------------------
+
+def _get_task_executor():
+    if _task_executor_source is None:
+        return None
+    try:
+        return _task_executor_source() if callable(_task_executor_source) \
+            else _task_executor_source
+    except Exception as e:
+        logger.warning(f"TaskExecutor provider failed: {e}")
+        return None
 
 
-def update_ecosystem(**kw):
-    with _state_lock:
-        _ecosystem.update(kw)
+def _active_task():
+    executor = _get_task_executor()
+    if executor is None:
+        return None
+    try:
+        return executor.get_active_task()
+    except Exception as e:
+        logger.warning(f"Failed to read active task: {e}")
+        return None
 
 
-def update_routing(**kw):
-    with _state_lock:
-        _model_routing.update(kw)
+def _live_tasks() -> list:
+    executor = _get_task_executor()
+    if executor is None:
+        return []
+    try:
+        tasks = executor.get_all_tasks()
+    except Exception as e:
+        logger.warning(f"Failed to read tasks: {e}")
+        return []
+    serialised = []
+    for task in tasks:
+        try:
+            serialised.append(task.to_dict())
+        except Exception:
+            continue
+    return serialised
+
+
+def _routing_rows() -> list:
+    if _llm_router is None:
+        return []
+    try:
+        health = _llm_router.get_provider_health()
+    except Exception as e:
+        logger.warning(f"Failed to read provider health: {e}")
+        return []
+    rows = []
+    for entry in health or []:
+        if not isinstance(entry, dict):
+            continue
+        rows.append({
+            "provider": str(entry.get("provider", "")),
+            "status": "online" if entry.get("ok") else "offline",
+            "model": str(entry.get("model", "") or ""),
+        })
+    return rows
 
 
 # ------------------------------------------------------------------
@@ -128,7 +151,13 @@ def update_routing(**kw):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", buddy_token=get_api_token())
+
+
+@app.route("/api/health")
+def api_health():
+    """Unauthenticated liveness probe (the only route exempt from token auth)."""
+    return jsonify({"status": "ok"})
 
 
 # ------------------------------------------------------------------
@@ -194,70 +223,58 @@ def api_metrics_stream():
 @app.route("/api/status")
 def api_status():
     state = _bridge.current_state() if _bridge else "unknown"
-    with _state_lock:
-        return jsonify({
-            "state": state,
-            "objective": _objective,
-            "tasks": _tasks,
-            "agents": _agents,
-        })
+    return jsonify({
+        "state": state,
+        "tasks": _live_tasks(),
+    })
+
+
+@app.route("/api/objective")
+def api_objective():
+    active = _active_task()
+    return jsonify({"objective": active.goal if active else None})
+
+
+@app.route("/api/tasks")
+def api_tasks():
+    return jsonify(_live_tasks())
+
+
+@app.route("/api/model-routing")
+def api_model_routing():
+    return jsonify(_routing_rows())
 
 
 @app.route("/api/memory")
 def api_memory():
     return jsonify({
-        "name": "Sathish",
-        "projects": ["JARVIS", "Trading System V4"],
-        "recent": ["Uses MSI Thin 15", "Works with OpenBB", "Uses Railway"],
+        "name": USER_NAME,
+        "projects": [],
+        "recent": [],
         "pinned": [],
     })
 
 
-@app.route("/api/automations")
-def api_automations():
-    with _state_lock:
-        return jsonify([
-            {"id": "1", "name": "Trading Monitor", "status": "running"},
-            {"id": "2", "name": "Daily Research Scan", "status": "scheduled"},
-            {"id": "3", "name": "System Backup", "status": "completed"},
-            {"id": "4", "name": "Railway Health Check", "status": "running"},
-        ])
-
-
-@app.route("/api/alerts")
-def api_alerts():
-    return jsonify([
-        {"type": "warning", "message": "Gemini quota at 85%"},
-        {"type": "info", "message": "Railway deployment completed"},
-    ])
-
-
 @app.route("/api/agent/log")
 def api_agent_log():
-    return jsonify([
-        {"timestamp": "08:21", "message": "Research Agent started"},
-        {"timestamp": "08:23", "message": "OpenBB scan completed"},
-        {"timestamp": "08:24", "message": "Memory updated"},
-        {"timestamp": "08:25", "message": "Generated strategy report"},
-    ])
-
-
-@app.route("/api/objectives")
-def api_objectives():
-    with _state_lock:
-        return jsonify(_objective)
-
-
-@app.route("/api/ecosystem")
-def api_ecosystem():
-    with _state_lock:
-        return jsonify(_ecosystem)
-
-
-@app.route("/api/routing")
-def api_routing():
-    with _state_lock:
-        return jsonify(_model_routing)
+    if not _bridge:
+        return jsonify([])
+    try:
+        events = _bridge.recent_tool_events(20)
+    except Exception as e:
+        logger.warning(f"Failed to read tool events: {e}")
+        return jsonify([])
+    entries = []
+    for event in events or []:
+        if not isinstance(event, dict) or not event.get("tool_name"):
+            continue
+        message = f"{event['tool_name']} {event.get('kind', 'event')}"
+        if event.get("summary"):
+            message += f": {event['summary']}"
+        elif event.get("error"):
+            message += f": {event['error']}"
+        entries.append({"timestamp": event.get("timestamp"), "message": message})
+    return jsonify(entries)
 
 
 @app.route("/api/system/info")
@@ -273,15 +290,23 @@ def api_system_info():
 def jarvis_state():
     """Unified state API for Live2D pets, Desktop Waifu, etc."""
     state = _bridge.current_state() if _bridge else "unknown"
-    with _state_lock:
-        return jsonify({
-            "state": state.upper() if state != "unknown" else "UNKNOWN",
-            "objective": _objective.get("title", ""),
-            "progress": _objective.get("progress", 0),
-            "step": _objective.get("step", ""),
-            "agents": [a["status"] for a in _agents],
-            "timestamp": datetime.now().isoformat(),
-        })
+    active = _active_task()
+    progress = 0
+    step = ""
+    if active:
+        steps = getattr(active, "steps", None) or []
+        index = getattr(active, "current_step_index", 0) or 0
+        if steps:
+            progress = round(min(index, len(steps)) / len(steps) * 100)
+            if index < len(steps):
+                step = getattr(steps[index], "description", "") or ""
+    return jsonify({
+        "state": state.upper() if state != "unknown" else "UNKNOWN",
+        "objective": getattr(active, "goal", "") if active else "",
+        "progress": progress,
+        "step": step,
+        "timestamp": datetime.now().isoformat(),
+    })
 
 
 # ------------------------------------------------------------------
@@ -325,8 +350,6 @@ def api_wake():
     if _wake_callback:
         try:
             _wake_callback()
-            update_objective(title="Listening...", status="listening",
-                             step="Awaiting voice input", progress=0)
         except Exception as e:
             logger.error(f"Wake callback failed: {e}")
             return jsonify({"ok": False, "error": str(e)}), 500
@@ -384,14 +407,18 @@ def api_toggle_mic():
 def api_confirm():
     data = request.get_json() or {}
     tool_name = data.get("tool_name", "")
+    confirmation_id = data.get("confirmation_id", "")
     outcome = data.get("outcome", "denied")
+    resolved = False
     if _confirm_callback:
         try:
-            _confirm_callback(tool_name, outcome)
+            resolved = bool(_confirm_callback(tool_name, confirmation_id, outcome))
         except Exception as e:
             logger.error(f"Confirm callback failed: {e}")
             return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify({"ok": True})
+    else:
+        logger.info("No confirm callback wired; dashboard confirmation ignored")
+    return jsonify({"ok": True, "resolved": resolved})
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -404,16 +431,11 @@ def api_chat():
     if not message:
         return jsonify({"ok": False, "error": "Message is required"}), 400
     try:
-        update_objective(title=message[:60], status="processing",
-                         step="Generating response...", progress=45)
         response = _chat_callback(message, speak=speak)
-        update_objective(status="idle", progress=100)
         return jsonify({"ok": True, "response": response})
     except TimeoutError:
-        update_objective(status="failed", step="Timed out")
         return jsonify({"ok": False, "error": "Assistant timed out"}), 504
     except Exception as e:
-        update_objective(status="failed", step=str(e))
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -442,15 +464,21 @@ def api_cancel_reminder(rid: str):
 # ------------------------------------------------------------------
 
 def init(bridge, wake_cb=None, clear_memory_cb=None, toggle_mic_cb=None,
-         confirm_cb=None, chat_cb=None):
+         confirm_cb=None, chat_cb=None, task_executor=None, llm_router=None):
     global _bridge, _wake_callback, _clear_memory_callback, _toggle_mic_callback
     global _confirm_callback, _chat_callback
+    global _task_executor_source, _llm_router
     _bridge = bridge
     _wake_callback = wake_cb
     _clear_memory_callback = clear_memory_cb
     _toggle_mic_callback = toggle_mic_cb
     _confirm_callback = confirm_cb
     _chat_callback = chat_cb
+    # Live references for real-data endpoints. `task_executor` may be the
+    # executor itself or a zero-arg callable returning it (the executor is
+    # created asynchronously during assistant startup).
+    _task_executor_source = task_executor
+    _llm_router = llm_router
     logger.info("   Dashboard bridge connected")
 
 

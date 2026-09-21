@@ -1,9 +1,5 @@
 import math
 import struct
-import time
-from typing import Optional
-
-import numpy as np
 
 _INTERRUPT_WINDOW_MS = 30
 

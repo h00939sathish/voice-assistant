@@ -485,46 +485,6 @@ body::before {
   flex-shrink: 0;
 }
 
-/* Automations */
-.auto-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-  font-size: 11px;
-  border-bottom: 1px solid rgba(26,26,53,0.3);
-}
-.auto-item:last-child { border-bottom: none; }
-.auto-status {
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  padding: 1px 6px;
-  border-radius: 8px;
-}
-.auto-status.running { background: var(--green-dim); color: var(--green); }
-.auto-status.scheduled { background: var(--blue-dim); color: var(--blue); }
-.auto-status.completed { background: rgba(124, 58, 237, 0.1); color: rgb(139, 92, 246); }
-.auto-status.failed { background: var(--red-dim); color: var(--red); }
-.auto-name { color: var(--text-dim); flex: 1; }
-
-/* Alerts */
-.alert-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 5px 0;
-  font-size: 11px;
-  border-bottom: 1px solid rgba(26,26,53,0.3);
-}
-.alert-item:last-child { border-bottom: none; }
-.alert-icon { font-size: 12px; flex-shrink: 0; margin-top: 1px; }
-.alert-msg { color: var(--text-dim); line-height: 1.4; }
-.alert-item.error .alert-msg { color: var(--red); }
-.alert-item.warning .alert-msg { color: var(--amber); }
-.alert-item.critical .alert-msg { color: var(--red); font-weight: 600; }
-
 /* ── Empty state ─────────────────── */
 .empty-state {
   text-align: center;
@@ -1004,33 +964,6 @@ body::before {
   color: white;
 }
 
-/* ── Agent Grid (Mission Control) ── */
-.agent-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-.agent-card {
-  padding: 10px;
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  transition: border-color 0.2s;
-}
-.agent-card:hover { border-color: var(--border-hi); }
-.agent-icon { font-size: 16px; }
-.agent-info { flex: 1; }
-.agent-name { font-size: 11px; font-weight: 600; color: var(--text); }
-.agent-status { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 1px; }
-.agent-status.running { color: var(--green); }
-.agent-status.idle { color: var(--muted); }
-.agent-status.waiting { color: var(--amber); }
-.agent-status.completed { color: var(--blue); }
-.agent-status.failed { color: var(--red); }
-
 /* ── Activity Row (Mission Control) */
 .activity-row {
   display: flex;
@@ -1048,60 +981,6 @@ body::before {
   flex-shrink: 0;
 }
 .activity-msg { color: var(--text-dim); }
-
-/* ── Suggestions (Mission Control) ─ */
-.suggestion-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.suggestion-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.suggestion-item:hover {
-  border-color: var(--border-hi);
-  background: var(--surface-2);
-}
-.sug-icon { font-size: 12px; }
-.sug-text { flex: 1; font-size: 11px; color: var(--text-dim); }
-.sug-action { font-size: 9px; color: var(--blue); font-weight: 600; }
-
-/* ── Ecosystem / Trading System ──── */
-.eco-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 3px 0;
-  font-size: 11px;
-  border-bottom: 1px solid rgba(26,26,53,0.3);
-}
-.eco-item:last-child { border-bottom: none; }
-.eco-label { color: var(--text-dim); flex: 1; }
-.eco-status {
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
-  padding: 1px 6px;
-  border-radius: 8px;
-}
-.eco-status.healthy { background: var(--green-dim); color: var(--green); }
-.eco-status.online { background: var(--green-dim); color: var(--green); }
-.eco-status.synchronized { background: var(--green-dim); color: var(--green); }
-.eco-status.connected { background: var(--green-dim); color: var(--green); }
-.eco-status.unknown { background: rgba(74,72,104,0.15); color: var(--muted); }
-.eco-status.disconnected { background: var(--red-dim); color: var(--red); }
-.eco-status.offline { background: var(--red-dim); color: var(--red); }
-.eco-status.warning { background: var(--amber-dim); color: var(--amber); }
-.eco-status.degraded { background: var(--amber-dim); color: var(--amber); }
 
 /* ── Enhanced Objective progress ──── */
 .objective .progress-track {
@@ -1123,4 +1002,80 @@ body::before {
 /* ── Orb audio-reactive ring ─────── */
 .orb-audio-ring {
   transition: transform 0.15s ease;
+}
+
+/* ── Confirmation banner ─────────── */
+.confirm-banner {
+  position: fixed;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(460px, calc(100vw - 40px));
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.confirm-card {
+  background: var(--surface-2);
+  border: 1px solid var(--amber);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  animation: confirmSlideIn 0.25s ease;
+}
+.confirm-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--amber);
+  margin-bottom: 8px;
+}
+.confirm-dryrun {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  max-height: 160px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.confirm-actions button {
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-hi);
+  cursor: pointer;
+  transition: filter 0.15s ease, background 0.15s ease;
+}
+.confirm-approve {
+  background: var(--green);
+  color: #04170b;
+  border-color: var(--green);
+}
+.confirm-approve:hover { filter: brightness(1.1); }
+.confirm-deny {
+  background: transparent;
+  color: var(--red);
+  border-color: var(--red);
+}
+.confirm-deny:hover { background: var(--red-dim); }
+@keyframes confirmSlideIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
 }

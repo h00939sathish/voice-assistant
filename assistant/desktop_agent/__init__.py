@@ -21,9 +21,6 @@ Usage:
     agent.open_app("chrome")
 """
 
-import os
-import sys
-
 from .browser_auto import BrowserAutomation
 from .core import DesktopAgent
 from .safety import EmergencyStop, SafetyLayer

@@ -17,28 +17,19 @@ logger = logging.getLogger(__name__)
 
 try:
     from PyQt6.QtCore import (
-        QEasingCurve,
         QPoint,
-        QPropertyAnimation,
-        QRect,
         Qt,
         QTimer,
-        pyqtSignal,
     )
     from PyQt6.QtGui import (
-        QBrush,
         QColor,
-        QFont,
-        QLinearGradient,
         QPainter,
-        QPainterPath,
         QPen,
         QRadialGradient,
     )
     from PyQt6.QtWidgets import (
         QApplication,
         QFrame,
-        QGraphicsDropShadowEffect,
         QLabel,
         QScrollArea,
         QSizePolicy,
@@ -50,6 +41,9 @@ try:
 except ImportError:
     PYQT_AVAILABLE = False
     logger.warning("PyQt6 not installed. Orb overlay disabled.")
+    # Placeholder bases so the Qt widget subclasses below can still be
+    # *defined* (they are never instantiated when PyQt6 is unavailable).
+    QFrame = QWidget = QLabel = object
 
 from assistant.orb_animations import (
     STATE_COLORS,

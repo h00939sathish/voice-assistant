@@ -18,15 +18,22 @@ from typing import Any
 
 import pyautogui
 
-from assistant.skill_response import SkillResponse
 from assistant.uia_utils import (
     _UIA_AVAILABLE,
+)
+from assistant.uia_utils import (
     click_element as uia_click,
+)
+from assistant.uia_utils import (
     find_elements as uia_find,
-    get_active_window as uia_active_window,
-    get_focused as uia_get_focused,
+)
+from assistant.uia_utils import (
     get_element_info as uia_element_info,
+)
+from assistant.uia_utils import (
     list_visible as uia_list,
+)
+from assistant.uia_utils import (
     wait_for_element as uia_wait,
 )
 from skills.base_skill import BaseSkill, skill
@@ -441,7 +448,7 @@ class ComputerUseSkill(BaseSkill):
                         found.append(hwnd)
             return True
 
-        WndEnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+        WndEnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)  # noqa: N806 -- Win32 callback type convention
         self._user32.EnumWindows(WndEnumProc(enum_handler), 0)
         return found[0] if found else None
 
@@ -632,8 +639,8 @@ class ComputerUseSkill(BaseSkill):
             screenshot.save(buf, format="PNG")
             b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
-            from assistant.llm_router import LLMRouter
             from assistant.conversation_memory import ConversationMemory
+            from assistant.llm_router import LLMRouter
 
             mem = ConversationMemory()
             router = LLMRouter(conversation_memory=mem)

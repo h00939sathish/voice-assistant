@@ -6,7 +6,6 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from assistant.llm_cache import LLMResponseCache
 from assistant.llm_router import LLMRouter
 
 
@@ -14,25 +13,21 @@ class TestLLMRouter:
     @pytest.fixture
     def router(self):
         with patch("assistant.llm_router.ProviderRegistry"):
-            with patch("assistant.llm_router.LLMResponseCache"):
-                router = LLMRouter(prefer_local=True)
-                router._provider_registry = MagicMock()
-                router._fallback_config = MagicMock()
-                router._fallback_chain = MagicMock()
-                router._cache = MagicMock()
-                return router
+            router = LLMRouter(prefer_local=True)
+            router._provider_registry = MagicMock()
+            router._fallback_config = MagicMock()
+            router._fallback_chain = MagicMock()
+            return router
 
     def test_router_initialization(self):
         with patch("assistant.llm_router.ProviderRegistry"):
-            with patch("assistant.llm_router.LLMResponseCache"):
-                router = LLMRouter(prefer_local=True)
-                assert router.prefer_local is True
+            router = LLMRouter(prefer_local=True)
+            assert router.prefer_local is True
 
     def test_router_initialization_no_local_preference(self):
         with patch("assistant.llm_router.ProviderRegistry"):
-            with patch("assistant.llm_router.LLMResponseCache"):
-                router = LLMRouter(prefer_local=False)
-                assert router.prefer_local is False
+            router = LLMRouter(prefer_local=False)
+            assert router.prefer_local is False
 
     def test_router_has_skip_memory_phrases(self, router):
         assert hasattr(router, "_SKIP_MEMORY_PHRASES")
@@ -68,13 +63,11 @@ class TestLLMRouterDecisionMethods:
     @pytest.fixture
     def router(self):
         with patch("assistant.llm_router.ProviderRegistry"):
-            with patch("assistant.llm_router.LLMResponseCache"):
-                router = LLMRouter(prefer_local=True)
-                router._provider_registry = MagicMock()
-                router._fallback_config = MagicMock()
-                router._fallback_chain = MagicMock()
-                router._cache = MagicMock()
-                return router
+            router = LLMRouter(prefer_local=True)
+            router._provider_registry = MagicMock()
+            router._fallback_config = MagicMock()
+            router._fallback_chain = MagicMock()
+            return router
 
     @pytest.mark.asyncio
     async def test_decide_action_for_no_tool_pattern(self, router):
@@ -114,13 +107,11 @@ class TestLLMRouterBuildMessages:
     @pytest.fixture
     def router(self):
         with patch("assistant.llm_router.ProviderRegistry"):
-            with patch("assistant.llm_router.LLMResponseCache"):
-                router = LLMRouter(prefer_local=True)
-                router._provider_registry = MagicMock()
-                router._fallback_config = MagicMock()
-                router._fallback_chain = MagicMock()
-                router._cache = MagicMock()
-                return router
+            router = LLMRouter(prefer_local=True)
+            router._provider_registry = MagicMock()
+            router._fallback_config = MagicMock()
+            router._fallback_chain = MagicMock()
+            return router
 
     def test_build_messages_basic(self, router):
         result = router._build_messages("Hello", [])
@@ -155,11 +146,10 @@ class TestLLMRouterToolSchemas:
     @pytest.fixture
     def router(self):
         with patch("assistant.llm_router.ProviderRegistry"):
-            with patch("assistant.llm_router.LLMResponseCache"):
-                router = LLMRouter(prefer_local=True)
-                router._provider_registry = MagicMock()
-                router._fallback_chain = MagicMock()
-                return router
+            router = LLMRouter(prefer_local=True)
+            router._provider_registry = MagicMock()
+            router._fallback_chain = MagicMock()
+            return router
 
     def test_tool_name_from_schema(self, router):
         schema = {"function": {"name": "test_tool"}}
@@ -238,11 +228,10 @@ class TestLLMRouterToolDiscovery:
     @pytest.fixture
     def router(self):
         with patch("assistant.llm_router.ProviderRegistry"):
-            with patch("assistant.llm_router.LLMResponseCache"):
-                router = LLMRouter(prefer_local=True)
-                router._provider_registry = MagicMock()
-                router._fallback_chain = MagicMock()
-                return router
+            router = LLMRouter(prefer_local=True)
+            router._provider_registry = MagicMock()
+            router._fallback_chain = MagicMock()
+            return router
 
     def test_fallback_tool_discovery_with_matches(self, router):
         all_tools = [
@@ -290,13 +279,12 @@ class TestLLMRouterExecuteToolBatch:
     @pytest.fixture
     def router(self):
         with patch("assistant.llm_router.ProviderRegistry"):
-            with patch("assistant.llm_router.LLMResponseCache"):
-                router = LLMRouter(prefer_local=True)
-                router._provider_registry = MagicMock()
-                router._fallback_chain = MagicMock()
-                router._tool_runner = MagicMock()
-                router._tool_runner.execute = AsyncMock()
-                return router
+            router = LLMRouter(prefer_local=True)
+            router._provider_registry = MagicMock()
+            router._fallback_chain = MagicMock()
+            router._tool_runner = MagicMock()
+            router._tool_runner.execute = AsyncMock()
+            return router
 
     @pytest.mark.asyncio
     async def test_execute_tool_batch_empty(self, router):
@@ -314,56 +302,3 @@ class TestLLMRouterExecuteToolBatch:
         result = await router._execute_tool_batch(tool_calls, "test message")
         assert len(result) == 1
 
-
-class TestLLMResponseCache:
-    @pytest.fixture
-    def cache(self):
-        return LLMResponseCache(ttl_seconds=300)
-
-    def test_cache_initialization(self, cache):
-        assert cache._ttl == 300
-        assert cache._cache == {}
-
-    def test_cache_set_and_get(self, cache):
-        cache.set("test message", "test response")
-        result = cache.get("test message")
-        assert result == "test response"
-
-    def test_cache_get_miss(self, cache):
-        result = cache.get("nonexistent message")
-        assert result is None
-
-    def test_cache_clear(self, cache):
-        cache.set("message1", "response1")
-        cache.set("message2", "response2")
-        cache.clear()
-        assert len(cache._cache) == 0
-
-    def test_cache_invalidate(self, cache):
-        cache.set("message1", "response1")
-        cache.invalidate("message1")
-        result = cache.get("message1")
-        assert result is None
-
-    def test_cache_key_includes_history(self, cache):
-        cache.set("message", "response", history_hash="abc123")
-        result = cache.get("message", history_hash="abc123")
-        assert result == "response"
-
-    def test_cache_different_history_different_key(self, cache):
-        cache.set("message", "response1", history_hash="hash1")
-        result = cache.get("message", history_hash="hash2")
-        assert result is None
-
-
-class TestLLMRouterCacheIntegration:
-    @pytest.fixture
-    def router(self):
-        with patch("assistant.llm_router.ProviderRegistry"):
-            with patch("assistant.llm_router.LLMResponseCache"):
-                router = LLMRouter(prefer_local=True)
-                return router
-
-    def test_router_has_cache(self, router):
-        assert hasattr(router, "_cache")
-        assert router._cache is not None

@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import secrets
 import struct
 import time
 import wave
@@ -23,17 +24,73 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import (
+    Depends,
     FastAPI,
     File,
     HTTPException,
+    Request,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="Buddy Assistant API")
+from assistant.authority_gate import ActionOutcome, AuthorityGate
+from config import assert_safe_bind, get_api_token
+
+TOKEN_HEADER = "X-Buddy-Token"
+HEALTH_PATH = "/api/health"
+
+
+def require_token(request: Request = None) -> None:
+    """FastAPI dependency: reject requests without a valid X-Buddy-Token.
+
+    Exemptions: CORS preflight (OPTIONS) and GET /api/health only.
+    Non-HTTP scopes are authenticated separately at WebSocket accept time
+    (see _ws_handshake_ok); this dependency no-ops for those scopes.
+    """
+    if request is None or request.scope.get("type") != "http":
+        return
+    if request.method == "OPTIONS":
+        return
+    if request.url.path == HEALTH_PATH:
+        return
+    provided = request.headers.get(TOKEN_HEADER, "")
+    expected = get_api_token()
+    if not provided or not secrets.compare_digest(
+        provided.encode("utf-8"), expected.encode("utf-8")
+    ):
+        raise HTTPException(status_code=401, detail="Invalid or missing API token")
+
+
+async def _ws_handshake_ok(websocket: WebSocket) -> bool:
+    """WebSocket clients cannot set headers — they pass ?token= on the URL."""
+    provided = websocket.query_params.get("token", "")
+    expected = get_api_token()
+    return bool(provided) and secrets.compare_digest(
+        provided.encode("utf-8"), expected.encode("utf-8")
+    )
+
+
+WS_REJECT_CODE = 4401
+
+
+app = FastAPI(title="Buddy Assistant API", dependencies=[Depends(require_token)])
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5050",
+        "http://localhost:5050",
+        "http://127.0.0.1:8765",
+        "http://localhost:8765",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["X-Buddy-Token", "Content-Type"],
+)
 
 BUDDY_PATH = os.environ.get("BUDDY_PATH", str(Path(__file__).resolve().parent.parent))
 
@@ -239,6 +296,62 @@ async def _execute_tool(
     return {"ok": True, "status": "ok", "result": raw}
 
 
+def _get_authority_gate(assistant):
+    """Reuse the live ToolRunner's gate so policy/min-level stay single-source."""
+    skill_router = getattr(assistant, "skill_router", None)
+    runner = getattr(skill_router, "tool_runner", None) or getattr(
+        assistant, "tool_runner", None
+    )
+    if runner is not None and hasattr(runner, "_get_gate"):
+        return runner._get_gate()
+    return AuthorityGate()
+
+
+def _remote_gate_response(assistant, tool_name: str, args: dict[str, Any]):
+    """Enforce the authority gate for non-interactive HTTP callers.
+
+    Remote requests have no human confirmation channel attached, so a
+    confirm-outcome action is never dispatched (202) and the underlying
+    executor is left untouched; policy-blocked actions return 403. Only
+    read-only classification/audit APIs are used — never gate.check() —
+    so the voice path's pending-approval state is untouched.
+    """
+    gate = _get_authority_gate(assistant)
+    risk = gate.classify_risk(tool_name, args)
+    outcome = ActionOutcome.from_risk(risk, gate.min_level)
+
+    if outcome == ActionOutcome.BLOCKED:
+        gate.log_action(tool_name, args, was_approved=False, risk_level=risk)
+        return JSONResponse(
+            status_code=403,
+            content={
+                "status": "blocked",
+                "tool": tool_name,
+                "risk": risk.name,
+                "detail": (
+                    f"{risk.name}-risk action '{tool_name}' denied by safety policy"
+                ),
+            },
+        )
+
+    if outcome == ActionOutcome.CONFIRM:
+        gate.log_action(tool_name, args, was_approved=False, risk_level=risk)
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "requires_confirmation",
+                "tool": tool_name,
+                "risk": risk.name,
+                "detail": (
+                    "Remote callers have no interactive confirmation channel; "
+                    "run this action locally to approve it."
+                ),
+            },
+        )
+
+    return None
+
+
 def _set_wake_word_enabled(assistant, enabled: bool) -> bool:
     if hasattr(assistant, "set_wake_word_enabled"):
         return bool(assistant.set_wake_word_enabled(enabled))
@@ -436,6 +549,12 @@ async def root():
     return {"buddy": "online", "version": "1.0", "state": _state}
 
 
+@app.get(HEALTH_PATH)
+async def health():
+    """Unauthenticated liveness probe (the only route exempt from token auth)."""
+    return {"status": "ok"}
+
+
 @app.get("/api/status")
 async def status():
     assistant = _assistant
@@ -552,6 +671,9 @@ async def run_skill(req: SkillRunRequest):
         assistant = _get_assistant()
         args = dict(req.params or {})
         args.setdefault("command", req.skill_name)
+        gated = _remote_gate_response(assistant, req.skill_name, args)
+        if gated is not None:
+            return gated
         return await _execute_tool(assistant, req.skill_name, args)
     except HTTPException:
         raise
@@ -564,6 +686,9 @@ async def buddy_tool(req: BuddyToolRequest):
     try:
         assistant = _get_assistant()
         tool_name, args = _normalize_tool_request(req)
+        gated = _remote_gate_response(assistant, tool_name, args)
+        if gated is not None:
+            return gated
         return await _execute_tool(assistant, tool_name, args)
     except HTTPException:
         raise
@@ -591,10 +716,20 @@ async def desktop_execute(req: DesktopExecuteRequest):
     """Execute desktop automation action via skill router."""
     try:
         assistant = _get_assistant()
-        set_state("THINKING")
         target = f" {req.target}" if req.target else ""
         params = f" with {req.params}" if req.params else ""
         command = f"{req.action}{target}{params}".strip()
+        gate_args: dict[str, Any] = {"action": str(req.action), "command": command}
+        if req.target:
+            gate_args["target"] = str(req.target)
+        if req.params:
+            gate_args["params"] = json.dumps(req.params)
+        gated = _remote_gate_response(
+            assistant, str(req.action).strip().lower(), gate_args
+        )
+        if gated is not None:
+            return gated
+        set_state("THINKING")
         result = await _run_chat_pipeline(
             assistant, command, speak=False, source="api_desktop"
         )
@@ -613,6 +748,9 @@ async def desktop_screenshot():
     """Take screenshot via skill router."""
     try:
         assistant = _get_assistant()
+        gated = _remote_gate_response(assistant, "desktop", {"action": "screenshot"})
+        if gated is not None:
+            return gated
         if hasattr(assistant, "skill_router"):
             result = assistant.skill_router.run_skill(
                 "desktop", {"action": "screenshot"}
@@ -628,6 +766,9 @@ async def desktop_windows():
     """List open windows via skill router."""
     try:
         assistant = _get_assistant()
+        gated = _remote_gate_response(assistant, "desktop", {"action": "list_windows"})
+        if gated is not None:
+            return gated
         if hasattr(assistant, "skill_router"):
             result = assistant.skill_router.run_skill(
                 "desktop", {"action": "list_windows"}
@@ -873,6 +1014,9 @@ async def websocket_endpoint(websocket: WebSocket):
       {"type": "error",      "error": "..."}
       {"type": "pong"}
     """
+    if not await _ws_handshake_ok(websocket):
+        await websocket.close(code=WS_REJECT_CODE)
+        return
     await websocket.accept()
     active_connections.append(websocket)
     vad = StreamingVAD()
@@ -1049,6 +1193,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.websocket("/aionui")
 async def aionui_ws_endpoint(websocket: WebSocket):
+    if not await _ws_handshake_ok(websocket):
+        await websocket.close(code=WS_REJECT_CODE)
+        return
     await websocket.accept()
     aionui_connections.append(websocket)
     last_seq = 0
@@ -1350,17 +1497,18 @@ async def chat_stream(req: ChatRequest):
 
             if hasattr(assistant.llm, "stream_chat"):
                 async for chunk in assistant.llm.stream_chat(req.message):
-                    yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                    yield f"data: {json.dumps({'delta': chunk})}\n\n"
             else:
                 response = await _run_chat_pipeline(
                     assistant, req.message, speak=False, source="api_chat_stream"
                 )
-                yield f"data: {json.dumps({'chunk': response})}\n\n"
+                yield f"data: {json.dumps({'delta': response})}\n\n"
 
             set_state("IDLE")
-            yield f"data: {json.dumps({'done': True})}\n\n"
+            yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -1370,4 +1518,6 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.environ.get("BUDDY_API_PORT", "8765"))
-    uvicorn.run(app, host="127.0.0.1", port=port, log_config=None)
+    host = "127.0.0.1"
+    assert_safe_bind(host)
+    uvicorn.run(app, host=host, port=port, log_config=None, access_log=False)

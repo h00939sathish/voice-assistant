@@ -41,7 +41,6 @@ from assistant.app_init import (
 from assistant.cli_parser import parse_args
 from assistant.dashboard_bridge import DashboardBridge
 from assistant.events import (
-    ConfirmationEvent,
     ResponseEvent,
     StateChangeEvent,
     StatusEvent,
@@ -69,8 +68,13 @@ from config import (
     SESSION_IDLE_TIMEOUT,
     SOUNDS_DIR,
     WAKE_WORD_STARTUP_ENABLED,
+    assert_safe_bind,
 )
-from gui.tray import SystemTrayApp
+
+try:
+    from gui.tray import SystemTrayApp
+except ImportError:  # Windows-only system tray (winreg/pystray); headless/CI safe
+    SystemTrayApp = None
 from assistant.vad import InterruptionVAD
 
 logger = get_logger("main")
@@ -869,13 +873,34 @@ def main():
 
         return _inner
 
-    def _on_tool_confirmed(event_bus):
-        def _inner(tool_name: str, outcome: str):
-            event_bus.publish(
-                ConfirmationEvent(tool_name=tool_name, action=outcome, dry_run="")
-            )
+    tool_runner = (
+        deps["llm"].get_tool_runner()
+        if hasattr(deps["llm"], "get_tool_runner")
+        else None
+    )
 
-        return _inner
+    def _on_confirmation_request(tool_name: str, confirmation_id: str):
+        # The tool runner already published ConfirmationEvent(action="requested",
+        # confirmation_id=...) so the dashboard can render Approve/Deny; this hook
+        # just records that an externally-resolvable confirmation is now pending.
+        logger.info(f"🔒 Confirmation pending: {tool_name} [{confirmation_id}]")
+
+    def _on_tool_confirmed(tool_name: str, confirmation_id: str, outcome: str):
+        """Resolve a pending dashboard confirmation (called from the Flask thread)."""
+        if tool_runner is None:
+            return False
+        approved = str(outcome).lower() in {"approved", "approve", "yes", "y", "true"}
+        resolved = tool_runner.resolve_confirmation(tool_name, confirmation_id, approved)
+        if not resolved:
+            logger.info(
+                f"Confirmation '{confirmation_id}' had nothing pending to resolve"
+            )
+        return resolved
+
+    if tool_runner is not None:
+        # Registering a resolver switches the confirmation transport from
+        # fail-closed auto-deny to an awaitable dashboard decision.
+        tool_runner.set_confirmation_resolver(_on_confirmation_request)
 
     import dashboard.app as _dash_app
 
@@ -890,12 +915,17 @@ def main():
         wake_cb=lambda: assistant.trigger_wake() or orb.set_state("listening"),
         clear_memory_cb=assistant.clear_memory,
         toggle_mic_cb=_toggle_mic(assistant, orb),
-        confirm_cb=_on_tool_confirmed(event_bus),
+        confirm_cb=_on_tool_confirmed,
         chat_cb=lambda message, speak=False: assistant.submit_text_chat(
             message, speak=speak, source="dashboard"
         ),
+        # Live refs for real-data dashboard endpoints. The task executor is
+        # created asynchronously during initialize(), hence the lazy getter.
+        task_executor=lambda: assistant.task_executor,
+        llm_router=deps["llm"],
     )
 
+    assert_safe_bind(args.dashboard_host)
     start_dashboard(args.dashboard_host, args.dashboard_port)
 
     event_bus.subscribe(StateChangeEvent, lambda e: update_ui(e.new_state))
@@ -969,6 +999,7 @@ def main():
 
             from assistant.api_server import app as api_app
 
+            assert_safe_bind("127.0.0.1")
             uvicorn.run(
                 api_app,
                 host="127.0.0.1",
@@ -982,6 +1013,10 @@ def main():
     api_thread = threading.Thread(target=run_api_server, daemon=True)
     api_thread.start()
     logger.info(f"   🌐 API server: http://localhost:{api_port}")
+
+    if SystemTrayApp is None:
+        logger.critical("System tray unavailable on this platform (gui.tray import failed).")
+        return
 
     tray = SystemTrayApp(on_exit=on_exit, on_show=on_show)
 
