@@ -39,6 +39,9 @@ async def test_ollama_tool_execution():
     router = LLMRouter(prefer_local=True)
     router._ollama_available = True
     router._check_ollama = MagicMock(return_value=True)
+    # Gate on the real provider.available (the fallback loop reads this, not the
+    # vestigial _ollama_available) so the Ollama path runs without a live server.
+    router._provider_registry.ollama._available = True
 
     # Mock responses from Ollama
     # 1. Tool Call Response
@@ -82,6 +85,9 @@ async def test_dynamic_search_tools_discovers_and_expands_tools():
     router = LLMRouter(prefer_local=True)
     router._ollama_available = True
     router._check_ollama = MagicMock(return_value=True)
+    # Gate on the real provider.available (the fallback loop reads this, not the
+    # vestigial _ollama_available) so the Ollama path runs without a live server.
+    router._provider_registry.ollama._available = True
     router._dynamic_tool_discovery = True
 
     discovered = [
@@ -154,6 +160,9 @@ async def test_ollama_falls_back_to_second_base_model():
     router = LLMRouter(prefer_local=True)
     router._ollama_available = True
     router._check_ollama = MagicMock(return_value=True)
+    # Gate on the real provider.available (the fallback loop reads this, not the
+    # vestigial _ollama_available) so the Ollama path runs without a live server.
+    router._provider_registry.ollama._available = True
     router._dynamic_tool_discovery = False
     router._ollama_model_names = ["phi4-mini:latest", "qwen3.5:4b-q4_K_M"]
 
@@ -181,6 +190,9 @@ async def test_ollama_multi_tool_batch_uses_task_executor():
     router = LLMRouter(prefer_local=True)
     router._ollama_available = True
     router._check_ollama = MagicMock(return_value=True)
+    # Gate on the real provider.available (the fallback loop reads this, not the
+    # vestigial _ollama_available) so the Ollama path runs without a live server.
+    router._provider_registry.ollama._available = True
     router._dynamic_tool_discovery = False
     router._groq_client = None
     router._gemini_client = None

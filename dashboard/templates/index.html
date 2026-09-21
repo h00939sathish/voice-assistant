@@ -27,6 +27,7 @@ const store = {
   tasks: [],
   routing: [],
   audioLevel: 0,
+  pendingConfirms: [],
 };
 
 function setState(k, v) {
@@ -43,6 +44,21 @@ async function api(p, b) {
   } };
   if (b) { o.method = 'POST'; o.body = JSON.stringify(b); }
   try { const r = await fetch(p, o); return r.json(); } catch { return {}; }
+}
+
+function addPendingConfirm(c) {
+  const list = (store.pendingConfirms || []).filter(x => x.confirmation_id !== c.confirmation_id);
+  list.push(c);
+  setState('pendingConfirms', list);
+}
+function removePendingConfirm(id) {
+  setState('pendingConfirms', (store.pendingConfirms || []).filter(x => x.confirmation_id !== id));
+}
+async function submitConfirmation(toolName, confirmationId, outcome) {
+  // Remove locally first so double-clicks can't fire two decisions; the backend
+  // is authoritative and also emits an approved/denied event that no-ops here.
+  removePendingConfirm(confirmationId);
+  return api('/api/confirm', { tool_name: toolName, confirmation_id: confirmationId, outcome: outcome });
 }
 
 async function sendMessage(text) {
@@ -160,7 +176,14 @@ function connectSSE() {
         if (p && p.subsystem) pushAgentLog('system '+p.subsystem+': '+(p.state||'unknown')+(p.detail?' ('+p.detail+')':''));
         break;
       case 'confirmation':
-        if (p && p.tool_name) pushAgentLog(p.tool_name+' confirmation '+(p.action||'requested'));
+        if (p && p.tool_name) {
+          pushAgentLog(p.tool_name+' confirmation '+(p.action||'requested'));
+          if (p.action === 'requested' && p.confirmation_id) {
+            addPendingConfirm({ tool_name:p.tool_name, confirmation_id:p.confirmation_id, dry_run:p.dry_run||'' });
+          } else if (p.confirmation_id && (p.action==='approved'||p.action==='denied'||p.action==='timed_out')) {
+            removePendingConfirm(p.confirmation_id);
+          }
+        }
         break;
       default:
         console.debug('[dashboard] ignoring SSE event type:', d ? d.type : d);
@@ -318,7 +341,29 @@ function App() {
   useStore();
   return h(React.Fragment, null,
     h(LeftPanel), h(CenterPanel), h(RightPanel),
+    store.pendingConfirms && store.pendingConfirms.length > 0 && h(ConfirmBanner),
     store.cmdOpen && h(CommandPalette)
+  );
+}
+
+/* ── Confirmation Banner ─────────── */
+function ConfirmBanner() {
+  const items = store.pendingConfirms || [];
+  return h('div', { className:'confirm-banner' },
+    items.map(c => h('div', { className:'confirm-card', key:c.confirmation_id },
+      h('div', { className:'confirm-title' }, '🔒 Approve action: ' + c.tool_name),
+      c.dry_run ? h('pre', { className:'confirm-dryrun' }, c.dry_run) : null,
+      h('div', { className:'confirm-actions' },
+        h('button', {
+          className:'confirm-deny',
+          onClick: () => submitConfirmation(c.tool_name, c.confirmation_id, 'denied'),
+        }, 'Deny'),
+        h('button', {
+          className:'confirm-approve',
+          onClick: () => submitConfirmation(c.tool_name, c.confirmation_id, 'approved'),
+        }, 'Approve')
+      )
+    ))
   );
 }
 

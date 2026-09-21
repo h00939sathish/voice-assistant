@@ -869,6 +869,26 @@ class LLMRouter(ILLMProvider):
             self._tool_name_from_schema,
         )
 
+    async def _chat_freellmapi(
+        self, provider, build_messages_fn, user_message, history, tools, *args, **kwargs
+    ):
+        return await chat_freellmapi(
+            provider,
+            build_messages_fn,
+            user_message,
+            history,
+            tools,
+            self._tool_discovery_top_k,
+            self._execute_tool_batch,
+            self._discover_tools,
+            self._initial_toolset,
+            self._merge_tool_schemas,
+            self._parse_tool_args,
+            self._normalize_model_tool_call,
+            self._compact_tool,
+            self._tool_name_from_schema,
+        )
+
     async def _chat_gemini(
         self, provider, build_messages_fn, user_message, history, tools=None
     ):

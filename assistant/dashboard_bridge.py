@@ -155,6 +155,7 @@ class DashboardBridge:
             "tool_name": event.tool_name,
             "action": event.action,
             "dry_run": event.dry_run,
+            "confirmation_id": event.confirmation_id,
         }
         self._record_tool_event("confirmation", data)
         self._push("confirmation", data)

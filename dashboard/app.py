@@ -407,14 +407,18 @@ def api_toggle_mic():
 def api_confirm():
     data = request.get_json() or {}
     tool_name = data.get("tool_name", "")
+    confirmation_id = data.get("confirmation_id", "")
     outcome = data.get("outcome", "denied")
+    resolved = False
     if _confirm_callback:
         try:
-            _confirm_callback(tool_name, outcome)
+            resolved = bool(_confirm_callback(tool_name, confirmation_id, outcome))
         except Exception as e:
             logger.error(f"Confirm callback failed: {e}")
             return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify({"ok": True})
+    else:
+        logger.info("No confirm callback wired; dashboard confirmation ignored")
+    return jsonify({"ok": True, "resolved": resolved})
 
 
 @app.route("/api/chat", methods=["POST"])

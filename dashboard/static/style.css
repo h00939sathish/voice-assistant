@@ -1003,3 +1003,79 @@ body::before {
 .orb-audio-ring {
   transition: transform 0.15s ease;
 }
+
+/* ── Confirmation banner ─────────── */
+.confirm-banner {
+  position: fixed;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(460px, calc(100vw - 40px));
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.confirm-card {
+  background: var(--surface-2);
+  border: 1px solid var(--amber);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  animation: confirmSlideIn 0.25s ease;
+}
+.confirm-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--amber);
+  margin-bottom: 8px;
+}
+.confirm-dryrun {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  max-height: 160px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.confirm-actions button {
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-hi);
+  cursor: pointer;
+  transition: filter 0.15s ease, background 0.15s ease;
+}
+.confirm-approve {
+  background: var(--green);
+  color: #04170b;
+  border-color: var(--green);
+}
+.confirm-approve:hover { filter: brightness(1.1); }
+.confirm-deny {
+  background: transparent;
+  color: var(--red);
+  border-color: var(--red);
+}
+.confirm-deny:hover { background: var(--red-dim); }
+@keyframes confirmSlideIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}

@@ -543,6 +543,9 @@ async def _chat_ollama_with_model(
                         )
                     else:
                         messages.append(pending_message)
+                last_batch_should_halt, last_batch_halt_message = _halt_signal_from(
+                    execute_tool_batch_fn
+                )
 
             if last_batch_should_halt:
                 return last_batch_halt_message or "Action cancelled."
@@ -743,6 +746,21 @@ async def chat_opencode(
     )
 
 
+def _halt_signal_from(execute_tool_batch_fn):
+    """Read the router's post-batch halt flag from its bound execute method.
+
+    ``execute_tool_batch_fn`` is always ``LLMRouter._execute_tool_batch``, so its
+    ``__self__`` is the router that records ``_last_batch_should_halt`` when a
+    tool returns a gated status (requires_confirmation / blocked / clarify).
+    Providers extracted into free functions lost access to ``self``; this bridges
+    the signal back so a denied confirmation stops the loop instead of retrying.
+    """
+    owner = getattr(execute_tool_batch_fn, "__self__", None)
+    if owner is not None and getattr(owner, "_last_batch_should_halt", False):
+        return True, getattr(owner, "_last_batch_halt_message", "")
+    return False, ""
+
+
 async def chat_freellmapi(
     provider: FreeLLMAPIProvider,
     build_messages_fn,
@@ -936,6 +954,9 @@ async def chat_openai_compatible(
                         if pending_message["content"] is None:
                             pending_message["content"] = str(next(execution_iter, ""))
                         messages.append(pending_message)
+                    last_batch_should_halt, last_batch_halt_message = (
+                        _halt_signal_from(execute_tool_batch_fn)
+                    )
 
                 if last_batch_should_halt:
                     return last_batch_halt_message or "Action cancelled."
